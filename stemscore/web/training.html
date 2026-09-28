@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>StemScore 训练中心</title>
+  <style>
+    :root { color-scheme: dark; font-family: "Microsoft YaHei UI", sans-serif; background:#09111f; color:#e8eef8; }
+    body { margin:0; padding:32px; }
+    main { max-width:1050px; margin:auto; }
+    h1 { margin:0 0 8px; font-size:30px; }
+    .sub { color:#8fa3bf; margin-bottom:24px; }
+    .grid { display:grid; grid-template-columns:1.1fr .9fr; gap:18px; }
+    section { background:#111d30; border:1px solid #263957; border-radius:14px; padding:20px; }
+    label { display:block; margin:12px 0 6px; color:#b8c7dc; }
+    textarea,input { box-sizing:border-box; width:100%; background:#08111e; color:#edf4ff; border:1px solid #365177; border-radius:8px; padding:10px; }
+    button { margin-top:12px; border:0; border-radius:8px; padding:10px 16px; background:#2f6fec; color:white; cursor:pointer; font-weight:600; }
+    progress { width:100%; height:18px; accent-color:#5a8eff; }
+    pre { min-height:260px; max-height:420px; overflow:auto; background:#070d17; padding:14px; border-radius:8px; white-space:pre-wrap; }
+    .groups { max-height:260px; overflow:auto; margin-top:12px; }
+    .group { border-top:1px solid #263957; padding:9px 0; }
+    .group small { color:#8fa3bf; display:block; overflow-wrap:anywhere; }
+    .warn { color:#ffc766; }
+    .metrics { display:flex; gap:10px; flex-wrap:wrap; margin:12px 0; }
+    .metric { background:#172841; border-radius:8px; padding:8px 12px; }
+  </style>
+</head>
+<body><main>
+  <h1>StemScore 本地训练中心</h1>
+  <div class="sub">数据不上传；目录、SHA-256、训练命令、日志和权重都保留在本机。</div>
+  <div class="grid">
+    <section>
+      <h2>训练数据目录</h2>
+      <p class="warn">扫描结果只代表技术上可配对。训练前仍须确认你拥有相应训练与模型分发权利。</p>
+      <label for="roots">每行一个本机目录</label>
+      <textarea id="roots" rows="7" placeholder="例如：D:\Music Training Data"></textarea>
+      <button onclick="catalog()">建立 / 更新数据目录</button>
+      <div class="metrics" id="metrics"></div>
+      <div class="groups" id="groups"></div>
+      <h2>可选训练配方</h2>
+      <p>当前预训练模型已经覆盖五步工作流，因此不强制训练。要微调 MSST 时，先在客户端文档流程中生成并审查配方 JSON。</p>
+      <input id="recipe" placeholder="训练配方 JSON 的绝对路径">
+      <button onclick="train()">启动已审查的训练配方</button>
+    </section>
+    <section>
+      <h2>实时进度</h2>
+      <progress id="progress" max="1" value="0"></progress>
+      <p id="state">等待状态…</p>
+      <pre id="log"></pre>
+    </section>
+  </div>
+</main>
+<script>
+async function post(url, data) {
+  const response = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)});
+  if (!response.ok) throw new Error(await response.text());
+}
+async function catalog() {
+  const roots = document.getElementById('roots').value.split(/\r?\n/).map(x=>x.trim()).filter(Boolean);
+  await post('/api/catalog', {roots});
+}
+async function showCatalog() {
+  const response = await fetch('/api/catalog');
+  if (!response.ok) return;
+  const catalog = await response.json();
+  const groups = document.getElementById('groups');
+  groups.innerHTML = '<h3>需人工审查的训练候选</h3>';
+  catalog.groups.filter(group=>group.quality==='paired' || group.quality==='candidate').forEach(group=>{
+    const item=document.createElement('div'); item.className='group';
+    item.innerHTML=`<strong>${group.quality} · ${group.files.length} 个文件</strong><small>${group.directory}</small><small>${group.reason}</small>`;
+    groups.appendChild(item);
+  });
+}
+async function train() {
+  const recipe_path = document.getElementById('recipe').value.trim();
+  if (!recipe_path) return alert('请先填写训练配方路径。');
+  if (!confirm('确认已审查数据授权、配置和输出目录？')) return;
+  await post('/api/train', {recipe_path});
+}
+async function refresh() {
+  const status = await fetch('/api/status').then(r=>r.json());
+  document.getElementById('progress').value = status.progress || 0;
+  document.getElementById('state').textContent = `${status.state}: ${status.message}`;
+  document.getElementById('log').textContent = (status.log || []).join('\n');
+  const metrics = document.getElementById('metrics');
+  metrics.innerHTML = '';
+  if (status.catalog) Object.entries(status.catalog).forEach(([k,v])=>{
+    const item=document.createElement('div'); item.className='metric'; item.textContent=`${k}: ${v}`; metrics.appendChild(item);
+  });
+  if (status.catalog) showCatalog();
+}
+setInterval(refresh, 1500); refresh();
+</script></body></html>
+

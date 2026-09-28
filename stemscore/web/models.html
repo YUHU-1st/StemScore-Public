@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>StemScore 本地模型</title>
+  <style>
+    :root { color-scheme: dark; font-family: "Microsoft YaHei UI", system-ui, sans-serif; background: #0b1220; color: #e7eefc; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; background: radial-gradient(circle at top, #182a49 0, #0b1220 44rem); }
+    main { width: min(1120px, calc(100% - 32px)); margin: 0 auto; padding: 42px 0 64px; }
+    h1, h2, p { margin-top: 0; }
+    h1 { margin-bottom: 8px; font-size: clamp(28px, 5vw, 42px); }
+    .lead { color: #adbed8; max-width: 760px; line-height: 1.7; }
+    .panel, .card { border: 1px solid #2b4164; background: rgba(13, 24, 42, .91); box-shadow: 0 18px 50px #0005; }
+    .panel { border-radius: 18px; padding: 22px; margin: 24px 0; }
+    .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+    .between { justify-content: space-between; }
+    button { border: 1px solid #5276aa; border-radius: 10px; padding: 9px 14px; background: #18365f; color: #f4f8ff; cursor: pointer; font: inherit; }
+    button:hover:not(:disabled) { background: #24518b; }
+    button:disabled { opacity: .42; cursor: not-allowed; }
+    input { width: min(520px, 100%); border: 1px solid #5276aa; border-radius: 10px; padding: 9px 12px; background: #09182b; color: #f4f8ff; font: inherit; }
+    .danger { background: #5d2930; border-color: #a44c5a; }
+    .progress { height: 12px; overflow: hidden; border-radius: 99px; background: #07101e; margin: 18px 0 12px; }
+    .progress > div { width: 0; height: 100%; background: linear-gradient(90deg, #45a2ff, #65e0c2); transition: width .2s ease; }
+    .muted { color: #8fa5c5; }
+    .error { min-height: 24px; color: #ff9ba7; margin-top: 12px; white-space: pre-wrap; }
+    .tiers { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
+    .tier { padding: 15px; border: 1px solid #314c73; border-radius: 13px; background: #111f35; }
+    .tier strong { display: block; margin-bottom: 10px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+    .card { border-radius: 15px; padding: 18px; }
+    .card h3 { margin: 0 0 8px; font-size: 18px; }
+    .card p { color: #9fb1cc; min-height: 48px; line-height: 1.55; }
+    .meta { display: grid; gap: 6px; margin: 14px 0; color: #bdcbe0; font-size: 14px; }
+    .badge { display: inline-block; border-radius: 99px; padding: 4px 9px; background: #263b5d; color: #bed7ff; font-size: 12px; }
+    .badge.installed { background: #174b3c; color: #8cf0c5; }
+    .badge.installing, .badge.partial { background: #624b17; color: #ffe08c; }
+    .badge.corrupt, .badge.failed, .badge.setup_failed { background: #632834; color: #ffadb8; }
+    a { color: #82c1ff; }
+    code { color: #c5dcff; }
+    @media (max-width: 600px) { main { width: min(100% - 20px, 1120px); padding-top: 24px; } .panel { padding: 16px; } }
+  </style>
+</head>
+<body>
+<main>
+  <h1>本地模型管理</h1>
+  <p class="lead">模型只保存到软件安装目录的 <code>models</code> 子目录。下载支持断点续传和暂停；文件完成后必须通过目录中固定的 SHA-256 才会标记为已安装。</p>
+
+  <section class="panel">
+    <div class="row between">
+      <div>
+        <strong id="download-title">当前没有下载任务</strong>
+        <div class="muted" id="download-detail">等待选择模型。</div>
+      </div>
+      <div class="row">
+        <button id="pause" disabled>暂停</button>
+        <button id="resume" disabled>继续</button>
+      </div>
+    </div>
+    <div class="progress"><div id="progress-bar"></div></div>
+    <div class="row between muted"><span id="progress-label">0.0%</span><span id="speed-label">0 B/s</span></div>
+    <div class="error" id="error"></div>
+  </section>
+
+  <section class="panel">
+    <h2>按显存选择推荐组合</h2>
+    <p class="muted">组合包含 CLAP、一个适合该显存档位的 Qwen，以及固定版本的 llama.cpp 本地 runner。一键安装会逐个下载、校验并启用。</p>
+    <div class="row">
+      <label for="endpoint">本地端点</label>
+      <input id="endpoint" value="http://127.0.0.1:8091/v1" spellcheck="false">
+    </div>
+    <p class="muted">仅允许 localhost 或回环 IP。StemScore 在生成报告时按需启动已安装的 llama-server，不连接云端模型。</p>
+    <div class="tiers" id="tiers"></div>
+    <p class="muted" id="selection">当前未选择模型。</p>
+    <p class="muted" id="local-llm-status">本地 LLM 未启用。</p>
+  </section>
+
+  <section>
+    <h2>模型目录</h2>
+    <div class="grid" id="models"></div>
+  </section>
+</main>
+<script>
+  const ui = {
+    tiers: document.querySelector('#tiers'), models: document.querySelector('#models'),
+    title: document.querySelector('#download-title'), detail: document.querySelector('#download-detail'),
+    bar: document.querySelector('#progress-bar'), progress: document.querySelector('#progress-label'),
+    speed: document.querySelector('#speed-label'), pause: document.querySelector('#pause'),
+    resume: document.querySelector('#resume'), error: document.querySelector('#error'),
+    selection: document.querySelector('#selection'), endpoint: document.querySelector('#endpoint'),
+    localLlmStatus: document.querySelector('#local-llm-status')
+  };
+  let catalog = null;
+  let latestStatus = null;
+  const statusNodes = new Map();
+  const downloadButtons = new Map();
+
+  const size = value => {
+    const units = ['B', 'KiB', 'MiB', 'GiB'];
+    let number = Number(value || 0), index = 0;
+    while (number >= 1024 && index < units.length - 1) { number /= 1024; index++; }
+    return `${number.toFixed(index ? 1 : 0)} ${units[index]}`;
+  };
+
+  async function request(path, payload) {
+    const options = payload === undefined ? {} : {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)
+    };
+    const response = await fetch(path, options);
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+    return data;
+  }
+
+  function element(tag, text, className) {
+    const node = document.createElement(tag);
+    if (text !== undefined) node.textContent = text;
+    if (className) node.className = className;
+    return node;
+  }
+
+  function renderCatalog() {
+    ui.tiers.replaceChildren();
+    ui.models.replaceChildren();
+    for (const tier of catalog.tiers) {
+      const box = element('div', undefined, 'tier');
+      box.append(element('strong', `${tier.vram_gb} GB 显存`));
+      box.append(element('div', tier.recommended_model_ids.join(' + '), 'muted'));
+      const button = element('button', '一键安装并启用');
+      button.addEventListener('click', () => installTier(tier.recommended_model_ids));
+      box.append(button);
+      ui.tiers.append(box);
+    }
+    for (const model of catalog.models) {
+      const card = element('article', undefined, 'card');
+      const heading = element('div', undefined, 'row between');
+      heading.append(element('h3', model.display_name));
+      const badge = element('span', '', 'badge');
+      statusNodes.set(model.id, badge);
+      heading.append(badge);
+      card.append(heading, element('p', model.description || ''));
+      const meta = element('div', undefined, 'meta');
+      meta.append(element('span', `${model.family} · ${model.optional ? '可选' : '基础模型'}`));
+      meta.append(element('span', `${model.files.length} 个文件 · ${size(model.files.reduce((sum, file) => sum + file.size, 0))}`));
+      const links = element('span');
+      const source = element('a', '官方来源'); source.href = model.source_url; source.target = '_blank'; source.rel = 'noreferrer';
+      const license = element('a', `许可：${model.license}`); license.href = model.license_url; license.target = '_blank'; license.rel = 'noreferrer';
+      links.append(source, document.createTextNode(' · '), license); meta.append(links); card.append(meta);
+      const button = element('button', '下载 / 继续下载');
+      button.addEventListener('click', () => startDownload(model.id));
+      downloadButtons.set(model.id, button); card.append(button); ui.models.append(card);
+    }
+  }
+
+  async function startDownload(modelId) {
+    try { ui.error.textContent = ''; await request('/api/download', {model_id: modelId}); await refresh(); }
+    catch (error) { ui.error.textContent = error.message; }
+  }
+  async function selectModels(modelIds) {
+    try { ui.error.textContent = ''; await request('/api/select', {model_ids: modelIds, endpoint: ui.endpoint.value}); await refresh(); }
+    catch (error) { ui.error.textContent = error.message; }
+  }
+  async function installTier(modelIds) {
+    try {
+      ui.error.textContent = '';
+      for (const modelId of modelIds) {
+        let status = await request('/api/status');
+        renderStatus(status);
+        if (status.models[modelId] === 'installed') continue;
+        await request('/api/download', {model_id: modelId});
+        do {
+          await new Promise(resolve => setTimeout(resolve, 750));
+          status = await request('/api/status');
+          renderStatus(status);
+          if (status.download.model_id === modelId && status.download.state === 'failed') {
+            throw new Error(status.download.error || `${modelId} 安装失败`);
+          }
+        } while (status.models[modelId] !== 'installed');
+      }
+      await selectModels(modelIds);
+    } catch (error) { ui.error.textContent = error.message; }
+  }
+  async function control(path) {
+    try { ui.error.textContent = ''; await request(path, {}); await refresh(); }
+    catch (error) { ui.error.textContent = error.message; }
+  }
+
+  function renderStatus(status) {
+    latestStatus = status;
+    const task = status.download;
+    ui.title.textContent = task.model_id ? `${task.model_id} · ${task.state}` : '当前没有下载任务';
+    ui.detail.textContent = task.filename || task.phase || '等待选择模型。';
+    ui.bar.style.width = `${Math.max(0, Math.min(100, task.percent || 0))}%`;
+    ui.progress.textContent = `${Number(task.percent || 0).toFixed(1)}% · ${size(task.downloaded_bytes)} / ${size(task.total_bytes)}`;
+    ui.speed.textContent = `${size(task.speed_bytes_per_second)}/s`;
+    ui.pause.disabled = task.state !== 'downloading' || task.phase !== 'downloading';
+    ui.resume.disabled = task.state !== 'paused';
+    if (task.error) ui.error.textContent = task.error;
+    const selected = status.selection.selected_model_ids || [];
+    ui.selection.textContent = selected.length ? `当前选择：${selected.join(' + ')}` : '当前未选择模型。';
+    const localLlm = status.selection.local_llm || {enabled: false};
+    if (localLlm.enabled) {
+      ui.endpoint.value = localLlm.endpoint;
+      ui.localLlmStatus.textContent = `已启用本地 LLM：${localLlm.model} · ${localLlm.endpoint} · runner ${localLlm.runner_model_id} 已安装`;
+    } else {
+      ui.localLlmStatus.textContent = localLlm.model ? `本地 LLM 未启用：${localLlm.model} 尚未选择 runner。` : '本地 LLM 未启用。';
+    }
+    for (const [modelId, node] of statusNodes) {
+      const value = status.models[modelId] || 'not_installed';
+      node.textContent = value;
+      node.className = `badge ${value}`;
+      const button = downloadButtons.get(modelId);
+      button.disabled = status.busy || value === 'installed';
+    }
+  }
+
+  async function refresh() {
+    try { renderStatus(await request('/api/status')); }
+    catch (error) { ui.error.textContent = error.message; }
+  }
+
+  ui.pause.addEventListener('click', () => control('/api/pause'));
+  ui.resume.addEventListener('click', () => control('/api/resume'));
+
+  (async () => {
+    try {
+      catalog = await request('/api/catalog');
+      renderCatalog();
+      await refresh();
+      setInterval(refresh, 750);
+    } catch (error) { ui.error.textContent = error.message; }
+  })();
+</script>
+</body>
+</html>

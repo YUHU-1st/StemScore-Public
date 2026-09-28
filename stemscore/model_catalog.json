@@ -1,0 +1,212 @@
+{
+  "schema_version": 1,
+  "storage_relative_path": "models",
+  "tiers": [
+    {
+      "vram_gb": 4,
+      "recommended_model_ids": [
+        "clap-htsat-fused",
+        "qwen2.5-0.5b-instruct-q5-k-m",
+        "llama.cpp-b10887-win-cpu-x64"
+      ]
+    },
+    {
+      "vram_gb": 8,
+      "recommended_model_ids": [
+        "clap-htsat-fused",
+        "qwen2.5-1.5b-instruct-q5-k-m",
+        "llama.cpp-b10887-win-cpu-x64"
+      ]
+    },
+    {
+      "vram_gb": 16,
+      "recommended_model_ids": [
+        "clap-htsat-fused",
+        "qwen2.5-7b-instruct-q4-k-m",
+        "llama.cpp-b10887-win-cpu-x64"
+      ]
+    },
+    {
+      "vram_gb": 24,
+      "recommended_model_ids": [
+        "clap-htsat-fused",
+        "qwen2.5-14b-instruct-q4-k-m",
+        "llama.cpp-b10887-win-cpu-x64"
+      ]
+    }
+  ],
+  "models": [
+    {
+      "id": "llama.cpp-b10887-win-cpu-x64",
+      "family": "llama.cpp",
+      "display_name": "llama.cpp b10887 Windows x64 CPU runner",
+      "description": "Pinned local OpenAI-compatible runner. The verified archive is unpacked under this model directory after download.",
+      "optional": false,
+      "source_url": "https://github.com/ggml-org/llama.cpp/releases/tag/b10887",
+      "license": "MIT",
+      "license_url": "https://github.com/ggml-org/llama.cpp/blob/b10887/LICENSE",
+      "runner": {
+        "archive_path": "llama-b10887-bin-win-cpu-x64.zip",
+        "executable_path": "runtime/llama-server.exe"
+      },
+      "files": [
+        {
+          "path": "llama-b10887-bin-win-cpu-x64.zip",
+          "url": "https://github.com/ggml-org/llama.cpp/releases/download/b10887/llama-b10887-bin-win-cpu-x64.zip",
+          "size": 18424345,
+          "sha256": "e650024739c5d627ddc7a5038439534a9ac4d49fa6a6cc74f2025d33db3f6a1a"
+        }
+      ]
+    },
+    {
+      "id": "clap-htsat-fused",
+      "family": "CLAP",
+      "display_name": "LAION CLAP HTSAT fused",
+      "description": "Local audio and text embedding model shared by all memory tiers.",
+      "optional": false,
+      "source_url": "https://huggingface.co/laion/clap-htsat-fused/tree/365dea6ef167def6676140ed93bbc43f84dabb28",
+      "license": "Apache-2.0",
+      "license_url": "https://www.apache.org/licenses/LICENSE-2.0",
+      "files": [
+        {
+          "path": "config.json",
+          "url": "https://huggingface.co/laion/clap-htsat-fused/resolve/365dea6ef167def6676140ed93bbc43f84dabb28/config.json?download=true",
+          "size": 5422,
+          "sha256": "b1d63489dc5061da229c23d2b11e9ca731639574449f82319fabb01da7fcf480"
+        },
+        {
+          "path": "merges.txt",
+          "url": "https://huggingface.co/laion/clap-htsat-fused/resolve/365dea6ef167def6676140ed93bbc43f84dabb28/merges.txt?download=true",
+          "size": 456356,
+          "sha256": "fe36cab26d4f4421ed725e10a2e9ddb7f799449c603a96e7f29b5a3c82a95862"
+        },
+        {
+          "path": "model.safetensors",
+          "url": "https://huggingface.co/laion/clap-htsat-fused/resolve/365dea6ef167def6676140ed93bbc43f84dabb28/model.safetensors?download=true",
+          "size": 614496152,
+          "sha256": "3f648de6d030e17494be455d323b8d191233fbae0c7ce0ba745fd21a926a63a6"
+        },
+        {
+          "path": "preprocessor_config.json",
+          "url": "https://huggingface.co/laion/clap-htsat-fused/resolve/365dea6ef167def6676140ed93bbc43f84dabb28/preprocessor_config.json?download=true",
+          "size": 537,
+          "sha256": "072bdd9ba771b6d213c56f15c0f765e33192b92e481581b52271cf16c9013684"
+        },
+        {
+          "path": "special_tokens_map.json",
+          "url": "https://huggingface.co/laion/clap-htsat-fused/resolve/365dea6ef167def6676140ed93bbc43f84dabb28/special_tokens_map.json?download=true",
+          "size": 280,
+          "sha256": "06e405a36dfe4b9604f484f6a1e619af1a7f7d09e34a8555eb0b77b66318067f"
+        },
+        {
+          "path": "tokenizer.json",
+          "url": "https://huggingface.co/laion/clap-htsat-fused/resolve/365dea6ef167def6676140ed93bbc43f84dabb28/tokenizer.json?download=true",
+          "size": 2108746,
+          "sha256": "77ef92283d67f0d97e1454909a964afcbfa2019f0fb9f18f8e88d5c25c3ba729"
+        },
+        {
+          "path": "tokenizer_config.json",
+          "url": "https://huggingface.co/laion/clap-htsat-fused/resolve/365dea6ef167def6676140ed93bbc43f84dabb28/tokenizer_config.json?download=true",
+          "size": 384,
+          "sha256": "377f91458f7729a4574a84c77bdce67dbc3c58c1a345a29bbf8c4eb1307948a3"
+        },
+        {
+          "path": "vocab.json",
+          "url": "https://huggingface.co/laion/clap-htsat-fused/resolve/365dea6ef167def6676140ed93bbc43f84dabb28/vocab.json?download=true",
+          "size": 798293,
+          "sha256": "ed19656ea1707df69134c4af35c8ceda2cc9860bf2c3495026153a133670ab5e"
+        }
+      ]
+    },
+    {
+      "id": "qwen2.5-0.5b-instruct-q5-k-m",
+      "family": "Qwen",
+      "display_name": "Qwen2.5 0.5B Instruct Q5_K_M",
+      "description": "Compact local assistant recommended for the 4 GB tier.",
+      "optional": true,
+      "source_url": "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/tree/9217f5db79a29953eb74d5343926648285ec7e67",
+      "license": "Apache-2.0",
+      "license_url": "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/blob/9217f5db79a29953eb74d5343926648285ec7e67/LICENSE",
+      "files": [
+        {
+          "path": "qwen2.5-0.5b-instruct-q5_k_m.gguf",
+          "url": "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/9217f5db79a29953eb74d5343926648285ec7e67/qwen2.5-0.5b-instruct-q5_k_m.gguf?download=true",
+          "size": 522186592,
+          "sha256": "041474553fcabfc2a2d67903f9d2c2e50bd92528e670da4f33b5d0ce6e59fd55"
+        }
+      ]
+    },
+    {
+      "id": "qwen2.5-1.5b-instruct-q5-k-m",
+      "family": "Qwen",
+      "display_name": "Qwen2.5 1.5B Instruct Q5_K_M",
+      "description": "Balanced local assistant recommended for the 8 GB tier.",
+      "optional": true,
+      "source_url": "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/tree/91cad51170dc346986eccefdc2dd33a9da36ead9",
+      "license": "Apache-2.0",
+      "license_url": "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/blob/91cad51170dc346986eccefdc2dd33a9da36ead9/LICENSE",
+      "files": [
+        {
+          "path": "qwen2.5-1.5b-instruct-q5_k_m.gguf",
+          "url": "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/91cad51170dc346986eccefdc2dd33a9da36ead9/qwen2.5-1.5b-instruct-q5_k_m.gguf?download=true",
+          "size": 1285494304,
+          "sha256": "b46661073c18e5b56a41fa320975f866a00def1ff08feef4718e013258896f8c"
+        }
+      ]
+    },
+    {
+      "id": "qwen2.5-7b-instruct-q4-k-m",
+      "family": "Qwen",
+      "display_name": "Qwen2.5 7B Instruct Q4_K_M",
+      "description": "Higher-quality two-shard local assistant recommended for the 16 GB tier.",
+      "optional": true,
+      "source_url": "https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF/tree/bb5d59e06d9551d752d08b292a50eb208b07ab1f",
+      "license": "Apache-2.0",
+      "license_url": "https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF/blob/bb5d59e06d9551d752d08b292a50eb208b07ab1f/LICENSE",
+      "files": [
+        {
+          "path": "qwen2.5-7b-instruct-q4_k_m-00001-of-00002.gguf",
+          "url": "https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF/resolve/bb5d59e06d9551d752d08b292a50eb208b07ab1f/qwen2.5-7b-instruct-q4_k_m-00001-of-00002.gguf?download=true",
+          "size": 3993201344,
+          "sha256": "dfce12e3862a5283ccfb88221b48480e58745165de856439950d0f22590580db"
+        },
+        {
+          "path": "qwen2.5-7b-instruct-q4_k_m-00002-of-00002.gguf",
+          "url": "https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF/resolve/bb5d59e06d9551d752d08b292a50eb208b07ab1f/qwen2.5-7b-instruct-q4_k_m-00002-of-00002.gguf?download=true",
+          "size": 689872288,
+          "sha256": "539cf93f78e887edea1c04e2d7d8cdaca9d01dae9c9025bcb8accbe29df3d72a"
+        }
+      ]
+    },
+    {
+      "id": "qwen2.5-14b-instruct-q4-k-m",
+      "family": "Qwen",
+      "display_name": "Qwen2.5 14B Instruct Q4_K_M",
+      "description": "Highest-quality three-shard local assistant recommended for the 24 GB tier.",
+      "optional": true,
+      "source_url": "https://huggingface.co/Qwen/Qwen2.5-14B-Instruct-GGUF/tree/b466e1f8c07172155743e8e1307507d8a4f91fbd",
+      "license": "Apache-2.0",
+      "license_url": "https://huggingface.co/Qwen/Qwen2.5-14B-Instruct-GGUF/blob/b466e1f8c07172155743e8e1307507d8a4f91fbd/LICENSE",
+      "files": [
+        {
+          "path": "qwen2.5-14b-instruct-q4_k_m-00001-of-00003.gguf",
+          "url": "https://huggingface.co/Qwen/Qwen2.5-14B-Instruct-GGUF/resolve/b466e1f8c07172155743e8e1307507d8a4f91fbd/qwen2.5-14b-instruct-q4_k_m-00001-of-00003.gguf?download=true",
+          "size": 3991999872,
+          "sha256": "a09ea5e7b1eafb1b30b241726c3cc3c905c96f14ad41e246ffa5f44e53904f68"
+        },
+        {
+          "path": "qwen2.5-14b-instruct-q4_k_m-00002-of-00003.gguf",
+          "url": "https://huggingface.co/Qwen/Qwen2.5-14B-Instruct-GGUF/resolve/b466e1f8c07172155743e8e1307507d8a4f91fbd/qwen2.5-14b-instruct-q4_k_m-00002-of-00003.gguf?download=true",
+          "size": 3989373504,
+          "sha256": "21b9457d079680d284e90ef69607c4b2d8ef64a09d4729cb7b5e1357bdba41ae"
+        },
+        {
+          "path": "qwen2.5-14b-instruct-q4_k_m-00003-of-00003.gguf",
+          "url": "https://huggingface.co/Qwen/Qwen2.5-14B-Instruct-GGUF/resolve/b466e1f8c07172155743e8e1307507d8a4f91fbd/qwen2.5-14b-instruct-q4_k_m-00003-of-00003.gguf?download=true",
+          "size": 1006737120,
+          "sha256": "c8d37006760a387a35216e070e6664d7da927f10be8eb870fef2e3d4833d9976"
+        }
+      ]
+    }
+  ]
+}

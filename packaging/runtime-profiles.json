@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "application": {
+    "id": "stemscore",
+    "displayName": "StemScore AI Transcription",
+    "sharedCore": {
+      "sourceDirectory": "dist/StemScore",
+      "entrypoint": "StemScore.exe",
+      "archiveNameTemplate": "StemScore-{version}-win64-core.zip"
+    }
+  },
+  "release": {
+    "githubAssetLimitBytes": 2147483648,
+    "recommendedPartSizeBytes": 1992294400,
+    "checksumAlgorithm": "SHA256"
+  },
+  "runtimeProfiles": [
+    {
+      "id": "rtx40-cu126",
+      "displayName": "NVIDIA GeForce RTX 40 / CUDA 12.6",
+      "priority": 40,
+      "computeCapabilities": [
+        "8.9"
+      ],
+      "torch": {
+        "version": "2.12.1",
+        "torchvisionVersion": "0.27.1",
+        "torchaudioVersion": "2.11.0",
+        "pythonVersion": "3.10",
+        "cuda": "12.6",
+        "requiredWheelArchitecture": "8.6",
+        "indexUrl": "https://download.pytorch.org/whl/cu126"
+      },
+      "driver": {
+        "minimum": "560.76",
+        "policy": "recommended"
+      },
+      "runtimeDirectory": "runtimes/rtx40-cu126",
+      "runtimeIncluded": false
+    },
+    {
+      "id": "rtx50-cu128",
+      "displayName": "NVIDIA GeForce RTX 50 / CUDA 12.8",
+      "priority": 50,
+      "computeCapabilities": [
+        "12.0"
+      ],
+      "torch": {
+        "version": "2.8.0",
+        "torchvisionVersion": "0.23.0",
+        "torchaudioVersion": "2.8.0",
+        "pythonVersion": "3.10",
+        "cuda": "12.8",
+        "requiredWheelArchitecture": "12.0",
+        "indexUrl": "https://download.pytorch.org/whl/cu128"
+      },
+      "driver": {
+        "minimum": "572.30",
+        "policy": "required"
+      },
+      "runtimeDirectory": "runtimes/rtx50-cu128",
+      "runtimeIncluded": false
+    }
+  ]
+}
