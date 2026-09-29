@@ -39,9 +39,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\packaging\Select-StemScore
 先构建冻结客户端，再启用公开安全模式：
 
 ```powershell
-.\build_stemscore.ps1 -Version 1.0.0-public-rc1
+.\build_stemscore.ps1 -Version 1.0.0-public-rc2
 powershell -NoProfile -ExecutionPolicy Bypass -File .\packaging\Build-StemScoreGpuRelease.ps1 `
-  -Version 1.0.0-public-rc1 -PublicSafe
+  -Version 1.0.0-public-rc2 -PublicSafe
 ```
 
 `-PublicSafe` 拒绝 `-RuntimePayloadRoot`，并扫描应用目录中的 `.ckpt`、`.pt`、`.pth`、`.th`、`.onnx`、`.safetensors` 和 `.gguf`。发布清单必须同时满足：

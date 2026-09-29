@@ -359,3 +359,13 @@ def test_rtx40_prepare_plan_pins_compatible_cu126_components(tmp_path: Path) -> 
     assert "12.6" in result.stdout
     assert not (output_root / "rtx40-cu126").exists()
 
+
+
+def test_build_script_checks_native_exit_codes() -> None:
+    repository = Path(__file__).resolve().parents[1]
+    script = (repository / "build_stemscore.ps1").read_text(encoding="utf-8")
+    assert "function Invoke-NativeChecked" in script
+    assert "Invoke-NativeChecked $python @('-m', 'pytest', '-q')" in script
+    assert "Invoke-NativeChecked $python @(" in script
+    assert "'-m', 'PyInstaller'" in script
+    assert "& $python -m PyInstaller" not in script

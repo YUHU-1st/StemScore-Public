@@ -2,7 +2,9 @@
 
 StemScore 是完全本地运行的 Windows 客户端，复用用户已有且有权使用的 MSST-GUI / UVR 环境，按五步人工审查流程完成：音乐导入 → 人声/伴奏 → 主唱/和声/乐器分轨 → 选择性去混响 → 各轨 MIDI。每一步保存命令、模型与产物 SHA-256、参数和日志，并在用户点击审查通过前停止。
 
-`1.0.0-public-rc1` 是可公开分发的核心版。它不携带任何模型权重或预装 Python/CUDA runtime；部署时绑定本机 MSST、UVR 和转写目录。完整离线模型包因部分权重未声明再分发许可、仅限研究或仅限非商业使用而继续保留在独立私有仓库分支和私有 Release 中。
+`1.0.0-public-rc2` 是可公开分发的核心版。它不携带任何模型权重或预装 Python/CUDA runtime；部署时绑定本机 MSST、UVR 和转写目录。完整离线模型包因部分权重未声明再分发许可、仅限研究或仅限非商业使用而继续保留在独立私有仓库分支和私有 Release 中。
+
+RC2 修复全新机器安装流程：Basic Pitch 可先独立安装；没有可运行 MSST/UVR 环境时部署器会直接失败并给出明确提示，不再留下 launchReady=false 的半成品安装。
 
 ## 主要功能
 
@@ -40,9 +42,9 @@ py -3.12 -m venv .venv312
 公开构建：
 
 ```powershell
-.\build_stemscore.ps1 -Version 1.0.0-public-rc1
+.\build_stemscore.ps1 -Version 1.0.0-public-rc2
 powershell -NoProfile -ExecutionPolicy Bypass -File .\packaging\Build-StemScoreGpuRelease.ps1 `
-  -Version 1.0.0-public-rc1 -PublicSafe
+  -Version 1.0.0-public-rc2 -PublicSafe
 ```
 
 `-PublicSafe` 禁止传入 runtime payload，并拒绝应用目录内的常见模型权重文件。不要把自己导入的模型、音乐、训练数据、项目输出或运行日志提交到公开仓库或 Release。

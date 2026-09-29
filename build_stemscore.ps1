@@ -4,6 +4,26 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+function Invoke-NativeChecked {
+    param(
+        [Parameter(Mandatory)][string]$FilePath,
+        [Parameter(Mandatory)][string[]]$Arguments,
+        [Parameter(Mandatory)][string]$FailureMessage
+    )
+
+    $previousPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        & $FilePath @Arguments 2>&1 | ForEach-Object { Write-Host $_ }
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousPreference
+    }
+    if ($exitCode -ne 0) {
+        throw "$FailureMessage (exit code $exitCode)"
+    }
+}
+
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $python = Join-Path $root '.venv312\Scripts\python.exe'
 $web = Join-Path $root 'stemscore\web'
@@ -11,11 +31,29 @@ $runtime = Join-Path $root 'stemscore\runtime'
 $modelCatalog = Join-Path $root 'stemscore\model_catalog.json'
 
 if ([string]::IsNullOrWhiteSpace($Version)) {
-    $Version = (& $python -c "import stemscore; print(stemscore.__version__)").Trim()
+    $previousPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $Version = (& $python -c "import stemscore; print(stemscore.__version__)").Trim()
+        $versionExitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousPreference
+    }
+    if ($versionExitCode -ne 0) {
+        throw "Failed to resolve StemScore version. (exit code $versionExitCode)"
+    }
 }
 
-& $python -m pytest -q
-& $python -m PyInstaller --noconfirm --clean --windowed --onedir --name StemScore --add-data "$web;stemscore\web" --add-data "$runtime;stemscore\runtime" --add-data "$modelCatalog;stemscore" (Join-Path $root 'run_stemscore.py')
+Invoke-NativeChecked $python @('-m', 'pytest', '-q') 'Test suite failed.'
+Invoke-NativeChecked $python @(
+    '-m', 'PyInstaller',
+    '--noconfirm', '--clean', '--windowed', '--onedir',
+    '--name', 'StemScore',
+    '--add-data', "$web;stemscore\web",
+    '--add-data', "$runtime;stemscore\runtime",
+    '--add-data', "$modelCatalog;stemscore",
+    (Join-Path $root 'run_stemscore.py')
+) 'PyInstaller build failed.'
 
 $packageDocs = Join-Path $root 'dist\StemScore\docs'
 New-Item -ItemType Directory -Path $packageDocs -Force | Out-Null
@@ -36,4 +74,3 @@ $portableHash = Get-FileHash -Algorithm SHA256 $portable
 $checksum = Join-Path $root "dist\StemScore-$Version-win64.zip.sha256"
 "$($portableHash.Hash.ToLowerInvariant())  StemScore-$Version-win64.zip" | Set-Content -LiteralPath $checksum -Encoding ascii
 $portableHash
-
