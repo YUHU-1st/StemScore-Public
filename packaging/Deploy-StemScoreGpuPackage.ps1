@@ -190,6 +190,10 @@ if ($PlanOnly) {
     return
 }
 
+if (-not $runtimeIncluded -and -not $externalRuntimeReady) {
+    throw "No runnable runtime is available for profile $($selection.ProfileId). This public package does not include the MSST/UVR runtime or core separation weights. Provide -MsstRoot, -UvrRoot, and -TranscriptionRoot together, or use a private/offline package that includes a verified runtime payload."
+}
+
 if (Test-Path -LiteralPath $destinationRoot) {
     throw "Destination already exists; choose a new empty path: $destinationRoot"
 }
