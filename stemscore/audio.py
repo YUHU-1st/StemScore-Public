@@ -66,8 +66,9 @@ def convert_to_wav(source: Path, target: Path, log: LogCallback) -> list[str]:
         "-hide_banner",
         "-loglevel",
         "warning",
-        "-xerror",
         "-y",
+        "-err_detect",
+        "ignore_err",
         "-i",
         str(source),
         "-ar",
@@ -81,11 +82,20 @@ def convert_to_wav(source: Path, target: Path, log: LogCallback) -> list[str]:
     try:
         run_logged(command, log)
     except RuntimeError as error:
+        if not target.is_file() or target.stat().st_size == 0:
+            target.unlink(missing_ok=True)
+            raise RuntimeError(
+                f"源音频无法解码出可用内容：{source}。可以换一个源文件，或先用播放器/转码工具另存后再试。"
+            ) from error
+        log("FFmpeg 返回了错误，但已经生成 WAV；StemScore 将优先继续使用可解码部分。")
+    try:
+        details = probe_audio(target)
+    except Exception as error:
         target.unlink(missing_ok=True)
-        raise RuntimeError(
-            f"源音频无法完整解码：{source}。文件可能损坏、下载不完整或包含无效音频帧；"
-            "请先用播放器确认整曲可正常播放，或重新获取/转码源文件后再试。"
-        ) from error
+        raise RuntimeError(f"源音频没有生成可用 WAV：{source}") from error
+    if float(details.get("duration_seconds", 0) or 0) <= 0:
+        target.unlink(missing_ok=True)
+        raise RuntimeError(f"源音频没有生成有效时长的 WAV：{source}")
     return command
 
 

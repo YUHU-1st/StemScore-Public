@@ -111,6 +111,14 @@ class Workflow:
     @classmethod
     def load(cls, project_file: Path) -> "Workflow":
         manifest = ProjectManifest.load(project_file)
+        interrupted = False
+        for stage in manifest.stages:
+            if stage.status == "running":
+                stage.status = "failed"
+                stage.error = "上次运行在程序关闭前未完成，可直接重试或跳过。"
+                interrupted = True
+        if interrupted:
+            manifest.save()
         settings = manifest.settings
         runtime = LocalRuntime(
             Path(settings["msst_root"]),
@@ -119,13 +127,63 @@ class Workflow:
         )
         return cls(manifest, runtime)
 
-    def run_stage(self, number: int, callback: LogCallback | None = None) -> None:
+    def _has_artifact(self, stage_number: int, role: str | None = None) -> bool:
+        for artifact in self.manifest.stage(stage_number).artifacts:
+            if artifact.media_type != "audio/wav":
+                continue
+            if role is not None and artifact.role != role:
+                continue
+            if Path(artifact.path).is_file():
+                return True
+        return False
+
+    def _validate_direct_start(self, number: int) -> None:
+        if number == 1:
+            return
+        if number == 2 and not self._has_artifact(1, "source"):
+            raise RuntimeError("第 2 步需要第 1 步已经生成 source WAV。")
+        if number == 3 and not (
+            self._has_artifact(2, "vocals") and self._has_artifact(2, "accompaniment")
+        ):
+            raise RuntimeError("第 3 步需要第 2 步已经生成 vocals 和 accompaniment。")
+        if number == 4 and not self._has_artifact(3):
+            raise RuntimeError("第 4 步需要第 3 步至少已有一条可用分轨。")
+        if number == 5 and not (self._has_artifact(1, "source") and self._has_artifact(3)):
+            raise RuntimeError("第 5 步需要第 1 步 source WAV 和第 3 步分轨；不要求第 4 步完成。")
+
+    def prepare_stage(self, number: int, allow_unreviewed: bool = False) -> None:
         stage = self.manifest.stage(number)
-        if stage.status != "ready":
+        if stage.status == "running":
+            raise RuntimeError(f"第 {number} 步已经在处理中。")
+        if not allow_unreviewed and stage.status != "ready":
             raise RuntimeError(f"第 {number} 步当前状态为 {stage.status}，不能运行。")
-        for previous in self.manifest.stages[: number - 1]:
-            if previous.status != "reviewed":
-                raise RuntimeError(f"必须先人工审查并通过第 {previous.number} 步。")
+        if allow_unreviewed:
+            self._validate_direct_start(number)
+        else:
+            for previous in self.manifest.stages[: number - 1]:
+                if previous.status not in {"reviewed", "skipped"}:
+                    raise RuntimeError(f"必须先完成并审查第 {previous.number} 步，或明确跳过该步骤。")
+
+        stage.status = "running"
+        stage.started_at = utc_now()
+        stage.completed_at = None
+        stage.reviewed_at = None
+        stage.error = None
+        stage.artifacts = []
+        stage.commands = []
+        stage.models = []
+        stage.explanation = []
+        self.manifest.save()
+
+    def run_stage(
+        self,
+        number: int,
+        callback: LogCallback | None = None,
+        allow_unreviewed: bool = False,
+    ) -> None:
+        stage = self.manifest.stage(number)
+        if stage.status != "running":
+            self.prepare_stage(number, allow_unreviewed=allow_unreviewed)
 
         log_path = self.root / "logs" / f"stage-{number}.log"
         log_handle = log_path.open("a", encoding="utf-8")
@@ -137,14 +195,6 @@ class Workflow:
             if callback:
                 callback(line)
 
-        stage.status = "running"
-        stage.started_at = utc_now()
-        stage.error = None
-        stage.artifacts = []
-        stage.commands = []
-        stage.models = []
-        stage.explanation = []
-        self.manifest.save()
         try:
             getattr(self, f"_stage_{number}")(stage, log)
             stage.status = "review_required"
@@ -179,6 +229,21 @@ class Workflow:
             raise RuntimeError("当前步骤不能重试。")
         stage.status = "ready"
         stage.error = None
+        self.manifest.save()
+
+    def skip(self, number: int) -> None:
+        stage = self.manifest.stage(number)
+        if stage.status == "running":
+            raise RuntimeError("正在运行的步骤不能直接跳过；可先等待本次运行结束，或直接选择其他步骤运行。")
+        if stage.status == "reviewed":
+            raise RuntimeError("该步骤已经审查通过，无需跳过。")
+        stage.status = "skipped"
+        stage.completed_at = utc_now()
+        stage.reviewed_at = utc_now()
+        stage.error = None
+        stage.explanation.append("用户选择跳过此步骤。后续步骤会尽量使用最近的可用上游产物。")
+        if number < 5 and self.manifest.stage(number + 1).status == "locked":
+            self.manifest.stage(number + 1).status = "ready"
         self.manifest.save()
 
     def _prefix(self, number: int) -> str:
@@ -383,6 +448,27 @@ class Workflow:
             target_name = f"{self._prefix(4)}_{artifact.role}_dry.wav"
             target_path = output / target_name
             source_level = mean_volume_db(Path(artifact.path))
+            if artifact.role not in selected_roles:
+                target_name = f"{self._prefix(4)}_{artifact.role}.wav"
+                target_path = output / target_name
+                shutil.copy2(Path(artifact.path), target_path)
+                generated.append(target_path)
+                bypassed.append(artifact.role)
+                log(f"按角色策略保留原分轨，不执行去混响：{artifact.role}")
+                self._add_audio(
+                    stage,
+                    target_path,
+                    artifact.role,
+                    {
+                        "source_mean_volume_db": source_level,
+                        "candidate_mean_volume_db": None,
+                        "output_mean_volume_db": source_level,
+                        "dereverb_accepted": False,
+                        "quality_status": "bypassed_by_role_policy",
+                        "quality_gate": "role not selected for dereverb; original stem preserved for MIDI",
+                    },
+                )
+                continue
             if source_level < -65.0:
                 shutil.copy2(Path(artifact.path), target_path)
                 generated.append(target_path)
@@ -399,25 +485,6 @@ class Workflow:
                         "dereverb_accepted": False,
                         "quality_status": "skipped_near_silent_stem",
                         "quality_gate": "skip dereverb below -65 dB",
-                    },
-                )
-                continue
-            if artifact.role not in selected_roles:
-                shutil.copy2(Path(artifact.path), target_path)
-                generated.append(target_path)
-                bypassed.append(artifact.role)
-                log(f"按角色策略保留原分轨，不执行去混响：{artifact.role}")
-                self._add_audio(
-                    stage,
-                    target_path,
-                    f"{artifact.role}_dry",
-                    {
-                        "source_mean_volume_db": source_level,
-                        "candidate_mean_volume_db": None,
-                        "output_mean_volume_db": source_level,
-                        "dereverb_accepted": False,
-                        "quality_status": "bypassed_by_role_policy",
-                        "quality_gate": "role not selected for dereverb; original stem preserved for MIDI",
                     },
                 )
                 continue
@@ -515,6 +582,24 @@ class Workflow:
             ]
         )
 
+    def _stage_5_audio_artifacts(self) -> list[Artifact]:
+        stage4 = self.manifest.stage(4)
+        stage3 = self.manifest.stage(3)
+        selected: dict[str, Artifact] = {}
+        if stage4.status != "running":
+            for artifact in stage4.artifacts:
+                if artifact.media_type != "audio/wav" or not Path(artifact.path).is_file():
+                    continue
+                role = artifact.role.removesuffix("_dry")
+                selected[role] = artifact
+        for artifact in stage3.artifacts:
+            if artifact.media_type != "audio/wav" or not Path(artifact.path).is_file():
+                continue
+            selected.setdefault(artifact.role, artifact)
+        if not selected:
+            raise RuntimeError("第 5 步没有找到可用分轨。可以先运行第 3 步，或恢复已有项目产物。")
+        return list(selected.values())
+
     def _stage_5(self, stage: StageRecord, log: LogCallback) -> None:
         source = self._artifact_by_role(1, "source")
         analysis, tempo_command = transcription.analyze(self.runtime, source, False, log)
@@ -526,9 +611,10 @@ class Workflow:
         drum_results: dict[str, tuple[dict, list[str]]] = {}
         piano_results: dict[str, tuple[dict, list[str]]] = {}
         skipped_results: dict[str, dict] = {}
-        for artifact in self.manifest.stage(4).artifacts:
-            if artifact.media_type != "audio/wav":
-                continue
+        stage5_inputs = self._stage_5_audio_artifacts()
+        if self.manifest.stage(4).status != "reviewed":
+            log("第 4 步尚未审查完成；第 5 步将优先使用已完成的第 4 步轨道，并用第 3 步原分轨补齐缺失角色。")
+        for artifact in stage5_inputs:
             role = artifact.role.removesuffix("_dry")
             target = output / f"{self._prefix(5)}_{role}.mid"
             if role == "drums":

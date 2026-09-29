@@ -80,11 +80,72 @@ def test_stage4_bypasses_unselected_role_without_model(tmp_path: Path) -> None:
     workflow.manifest.save()
     workflow.run_stage(4)
     stage = workflow.manifest.stage(4)
-    output = next(artifact for artifact in stage.artifacts if artifact.role == "piano_dry")
+    output = next(artifact for artifact in stage.artifacts if artifact.role == "piano")
+    assert output.path.endswith("_04_piano.wav")
     assert output.metadata["quality_status"] == "bypassed_by_role_policy"
     assert output.sha256 == Artifact.from_file(source, "piano", "audio/wav").sha256
     assert stage.commands == []
     assert stage.models == []
+
+
+def test_prepare_stage_marks_running_before_execution(tmp_path: Path) -> None:
+    source = tmp_path / "song.wav"
+    write_audible_wav(source)
+    workflow = Workflow.create(source, tmp_path / "projects", "running-status")
+    workflow.prepare_stage(1)
+    assert workflow.manifest.stage(1).status == "running"
+    reloaded = ProjectManifest.load(workflow.manifest.path)
+    assert reloaded.stage(1).status == "running"
+
+
+def test_skip_stage_unlocks_next_stage_and_normal_run_accepts_skipped_gate(tmp_path: Path) -> None:
+    source = tmp_path / "song.wav"
+    write_audible_wav(source)
+    workflow = Workflow.create(source, tmp_path / "projects", "skip")
+    workflow.manifest.stage(1).status = "reviewed"
+    workflow.manifest.stage(1).artifacts = [Artifact.from_file(source, "source", "audio/wav")]
+    workflow.manifest.stage(2).status = "ready"
+    workflow.manifest.save()
+    workflow.skip(2)
+    assert workflow.manifest.stage(2).status == "skipped"
+    assert workflow.manifest.stage(3).status == "ready"
+
+
+def test_stage5_can_use_stage3_when_stage4_is_incomplete(tmp_path: Path) -> None:
+    source = tmp_path / "song.wav"
+    write_audible_wav(source)
+    workflow = Workflow.create(source, tmp_path / "projects", "stage5-fallback")
+    workflow.manifest.stage(1).status = "reviewed"
+    workflow.manifest.stage(1).artifacts = [Artifact.from_file(source, "source", "audio/wav")]
+    workflow.manifest.stage(3).status = "reviewed"
+    roles = ["lead_vocal", "harmony_vocal", "bass", "drums", "guitar", "piano", "other"]
+    workflow.manifest.stage(3).artifacts = [Artifact.from_file(source, role, "audio/wav") for role in roles]
+    workflow.manifest.stage(4).status = "failed"
+    partial = tmp_path / "piano_dry.wav"
+    shutil.copy2(source, partial)
+    workflow.manifest.stage(4).artifacts = [Artifact.from_file(partial, "piano_dry", "audio/wav")]
+    workflow.manifest.save()
+
+    artifacts = workflow._stage_5_audio_artifacts()
+    by_role = {artifact.role.removesuffix("_dry"): artifact for artifact in artifacts}
+    assert set(by_role) == set(roles)
+    assert Path(by_role["piano"].path) == partial
+    assert Path(by_role["guitar"].path) == source
+
+
+def test_direct_stage5_does_not_require_stage4_completion(tmp_path: Path) -> None:
+    source = tmp_path / "song.wav"
+    write_audible_wav(source)
+    workflow = Workflow.create(source, tmp_path / "projects", "direct-five")
+    workflow.manifest.stage(1).status = "reviewed"
+    workflow.manifest.stage(1).artifacts = [Artifact.from_file(source, "source", "audio/wav")]
+    workflow.manifest.stage(3).status = "review_required"
+    workflow.manifest.stage(3).artifacts = [Artifact.from_file(source, "piano", "audio/wav")]
+    workflow.manifest.stage(4).status = "running"
+    workflow.manifest.stage(5).status = "locked"
+    workflow.manifest.save()
+    workflow.prepare_stage(5, allow_unreviewed=True)
+    assert workflow.manifest.stage(5).status == "running"
 
 
 def test_stage4_preserves_selected_role_when_permissive_dereverb_is_unavailable(

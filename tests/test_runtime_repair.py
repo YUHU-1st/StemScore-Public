@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import os
+import wave
 
 import pytest
 
@@ -99,7 +100,7 @@ def test_ffmpeg_repair_refreshes_existing_winget_links(tmp_path: Path, monkeypat
     assert any("FFmpeg 已就绪" in message for message in messages)
 
 
-def test_source_conversion_treats_decoder_errors_as_source_file_failures(
+def test_source_conversion_keeps_valid_partial_output_when_decoder_reports_errors(
     tmp_path: Path, monkeypatch
 ) -> None:
     source = tmp_path / "broken.flac"
@@ -111,12 +112,38 @@ def test_source_conversion_treats_decoder_errors_as_source_file_failures(
 
     def fail(command, _log):
         captured.extend(command)
-        target.write_bytes(b"partial")
+        with wave.open(str(target), "wb") as handle:
+            handle.setnchannels(2)
+            handle.setsampwidth(2)
+            handle.setframerate(44100)
+            handle.writeframes(b"\0\0\0\0" * 4410)
         raise RuntimeError("decoder failed")
 
     monkeypatch.setattr("stemscore.audio.run_logged", fail)
-    with pytest.raises(RuntimeError, match="源音频无法完整解码"):
-        convert_to_wav(source, target, lambda _message: None)
+    monkeypatch.setattr(
+        "stemscore.audio.probe_audio",
+        lambda _path: {"duration_seconds": 0.1, "sample_rate": 44100, "channels": 2},
+    )
+    messages: list[str] = []
+    convert_to_wav(source, target, messages.append)
 
-    assert "-xerror" in captured
+    assert "-xerror" not in captured
+    assert "ignore_err" in captured
+    assert target.exists()
+    assert any("优先继续使用可解码部分" in message for message in messages)
+
+
+def test_source_conversion_still_rejects_unusable_output(tmp_path: Path, monkeypatch) -> None:
+    source = tmp_path / "broken.flac"
+    source.write_bytes(b"not-a-flac")
+    target = tmp_path / "source.wav"
+    monkeypatch.setattr("stemscore.audio.executable", lambda _name: "ffmpeg.exe")
+
+    def fail(_command, _log):
+        target.write_bytes(b"")
+        raise RuntimeError("decoder failed")
+
+    monkeypatch.setattr("stemscore.audio.run_logged", fail)
+    with pytest.raises(RuntimeError, match="无法解码出可用内容"):
+        convert_to_wav(source, target, lambda _message: None)
     assert not target.exists()

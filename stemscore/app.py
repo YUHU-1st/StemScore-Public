@@ -24,6 +24,7 @@ STATUS_TEXT = {
     "review_required": "等待人工审查",
     "reviewed": "已审查通过",
     "failed": "失败",
+    "skipped": "已跳过",
 }
 
 
@@ -115,9 +116,13 @@ class App(tk.Tk):
         ttk.Separator(left).pack(fill="x", pady=16)
         self.run_button = ttk.Button(left, text="运行当前步骤", style="Accent.TButton", command=self._run_selected)
         self.run_button.pack(fill="x", pady=4)
+        self.direct_button = ttk.Button(left, text="直接运行所选步骤", command=self._run_direct)
+        self.direct_button.pack(fill="x", pady=4)
         self.approve_button = ttk.Button(left, text="审查通过，开始下一步", command=self._approve_and_next)
         self.approve_button.pack(fill="x", pady=4)
         ttk.Button(left, text="重试当前步骤", command=self._retry).pack(fill="x", pady=4)
+        self.skip_button = ttk.Button(left, text="跳过当前步骤", command=self._skip_stage)
+        self.skip_button.pack(fill="x", pady=4)
         self.repair_button = ttk.Button(left, text="一键修复运行环境", command=self._repair_runtime)
         self.repair_button.pack(fill="x", pady=4)
         self.repair_button.configure(state="disabled")
@@ -205,22 +210,29 @@ class App(tk.Tk):
             self.workflow = Workflow.load(find_project(Path(path)))
             self._repair_stage = None
             self._load_dereverb_selection()
-            selected = next((stage.number for stage in self.workflow.manifest.stages if stage.status not in {"reviewed", "locked"}), 5)
+            selected = next((stage.number for stage in self.workflow.manifest.stages if stage.status not in {"reviewed", "skipped", "locked"}), 5)
             self.current_stage.set(selected)
             self._refresh()
         except Exception as error:
             messagebox.showerror(APP_NAME, str(error))
 
-    def _run_stage(self, number: int) -> None:
+    def _run_stage(self, number: int, force: bool = False) -> None:
         if not self.workflow:
+            return
+        try:
+            self.workflow.prepare_stage(number, allow_unreviewed=force)
+        except Exception as error:
+            messagebox.showerror(APP_NAME, str(error))
+            self._refresh()
             return
         self.status.set(f"第 {number} 步处理中…")
         self._refresh()
+        self.update_idletasks()
 
         def work() -> None:
             try:
                 assert self.workflow is not None
-                self.workflow.run_stage(number, self._append_log)
+                self.workflow.run_stage(number, self._append_log, allow_unreviewed=force)
                 self.after(0, lambda: self._stage_done(number))
             except Exception as error:
                 self.after(0, lambda error=error: self._stage_failed(number, error))
@@ -282,6 +294,37 @@ class App(tk.Tk):
     def _run_selected(self) -> None:
         if self.workflow:
             self._run_stage(self.current_stage.get())
+
+    def _run_direct(self) -> None:
+        if not self.workflow:
+            return
+        number = self.current_stage.get()
+        stage = self.workflow.manifest.stage(number)
+        if stage.status == "running":
+            messagebox.showinfo(APP_NAME, f"第 {number} 步已经在处理中。")
+            return
+        if not messagebox.askyesno(
+            APP_NAME,
+            f"直接运行第 {number} 步“{STAGE_NAMES[number]}”？\n\n"
+            "这会跳过前置步骤的人工审查状态检查，但仍要求真正需要的上游文件已经存在。",
+        ):
+            return
+        self._run_stage(number, force=True)
+
+    def _skip_stage(self) -> None:
+        if not self.workflow:
+            return
+        number = self.current_stage.get()
+        if not messagebox.askyesno(APP_NAME, f"确定跳过第 {number} 步“{STAGE_NAMES[number]}”？"):
+            return
+        try:
+            self.workflow.skip(number)
+            if number < 5:
+                self.current_stage.set(number + 1)
+            self.status.set(f"第 {number} 步已跳过。")
+            self._refresh()
+        except Exception as error:
+            messagebox.showerror(APP_NAME, str(error))
 
     def _approve_and_next(self) -> None:
         if not self.workflow:
@@ -376,7 +419,9 @@ class App(tk.Tk):
             for number in range(1, 6):
                 self.stage_list.insert("end", f"{number}. {STAGE_NAMES[number]}  ·  锁定")
             self.run_button.configure(state="disabled")
+            self.direct_button.configure(state="disabled")
             self.approve_button.configure(state="disabled")
+            self.skip_button.configure(state="disabled")
             self.analysis_button.configure(state="disabled")
             self.repair_button.configure(state="disabled")
             for check in self.dereverb_checks:
@@ -389,7 +434,9 @@ class App(tk.Tk):
         self.stage_list.selection_set(number - 1)
         stage = self.workflow.manifest.stage(number)
         self.run_button.configure(state="normal" if stage.status == "ready" else "disabled")
+        self.direct_button.configure(state="disabled" if stage.status == "running" else "normal")
         self.approve_button.configure(state="normal" if stage.status == "review_required" else "disabled")
+        self.skip_button.configure(state="disabled" if stage.status in {"running", "reviewed", "skipped"} else "normal")
         self.repair_button.configure(
             state="normal" if self._repair_stage is not None and stage.number == self._repair_stage else "disabled"
         )
