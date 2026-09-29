@@ -1,0 +1,81 @@
+name: Publish public release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve version
+        id: meta
+        shell: pwsh
+        run: |
+          $text = Get-Content stemscore/__init__.py -Raw
+          if ($text -notmatch '__version__\s*=\s*"([^"]+)"') {
+            throw 'Unable to resolve StemScore version.'
+          }
+          $version = $Matches[1]
+          $tag = "v$version"
+          $exists = [bool](git tag --list $tag)
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          "exists=$($exists.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+
+      - name: Set up Python 3.12
+        if: steps.meta.outputs.exists != 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Create build environment
+        if: steps.meta.outputs.exists != 'true'
+        shell: pwsh
+        run: |
+          python -m venv .venv312
+          .\.venv312\Scripts\python.exe -m pip install --upgrade pip
+          .\.venv312\Scripts\python.exe -m pip install -r requirements.txt pytest pyinstaller
+
+      - name: Run tests
+        if: steps.meta.outputs.exists != 'true'
+        shell: pwsh
+        run: .\.venv312\Scripts\python.exe -m pytest -q
+
+      - name: Build Windows core package
+        if: steps.meta.outputs.exists != 'true'
+        shell: pwsh
+        run: .\build_stemscore.ps1 -Version '${{ steps.meta.outputs.version }}'
+
+      - name: Build public GPU release assets
+        if: steps.meta.outputs.exists != 'true'
+        shell: pwsh
+        run: .\packaging\Build-StemScoreGpuRelease.ps1 -Version '${{ steps.meta.outputs.version }}' -PublicSafe
+
+      - name: Publish prerelease
+        if: steps.meta.outputs.exists != 'true'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = '${{ steps.meta.outputs.version }}'
+          $tag = '${{ steps.meta.outputs.tag }}'
+          $releaseDir = Join-Path $PWD "release\StemScore-$version-gpu"
+          $notes = Join-Path $PWD "docs\releases\$tag.md"
+          if (-not (Test-Path $notes)) {
+            throw "Missing release notes: $notes"
+          }
+          $assets = @(Get-ChildItem $releaseDir -File | ForEach-Object { $_.FullName })
+          if ($assets.Count -eq 0) {
+            throw "No release assets found in $releaseDir"
+          }
+          gh release create $tag @assets --target $env:GITHUB_SHA --title "StemScore $version" --notes-file $notes --prerelease
