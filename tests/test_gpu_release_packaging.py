@@ -238,6 +238,53 @@ def test_public_safe_release_binds_user_supplied_runtime(tmp_path: Path) -> None
     assert Path(state["externalRuntimeRoots"]["transcription"]) == transcription
 
 
+def test_public_safe_deployer_rejects_missing_runtime_binding(tmp_path: Path) -> None:
+    repository = Path(__file__).resolve().parents[1]
+    build_script = repository / "packaging" / "Build-StemScoreGpuRelease.ps1"
+    application = tmp_path / "StemScore"
+    application.mkdir()
+    (application / "StemScore.exe").write_bytes(b"fake-app")
+    release = tmp_path / "release"
+
+    _powershell(
+        build_script,
+        "-Version",
+        "1.0.0-public-test",
+        "-SourceApplication",
+        str(application),
+        "-OutputDirectory",
+        str(release),
+        "-PublicSafe",
+    )
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_fake_nvidia_smi(fake_bin)
+    env = os.environ.copy()
+    env["PATH"] = str(fake_bin) + os.pathsep + env["PATH"]
+    destination = tmp_path / "installed"
+
+    with pytest.raises(subprocess.CalledProcessError) as error:
+        _powershell(
+            release / "Deploy-StemScoreGpuPackage.ps1",
+            "-ReleaseDirectory",
+            str(release),
+            "-Destination",
+            str(destination),
+            env=env,
+        )
+
+    assert "No runnable runtime is available" in error.value.stderr
+    assert not destination.exists()
+
+
+def test_transcription_setup_does_not_require_msst_before_basic_pitch() -> None:
+    repository = Path(__file__).resolve().parents[1]
+    script = (repository / "tools" / "setup_stemscore_runtime.ps1").read_text(encoding="utf-8")
+    assert "[Parameter(Mandatory)]" not in script
+    assert "Basic Pitch is ready; TransKun was skipped" in script
+
+
 def test_public_safe_release_rejects_model_weights_and_runtime_payload(tmp_path: Path) -> None:
     repository = Path(__file__).resolve().parents[1]
     build_script = repository / "packaging" / "Build-StemScoreGpuRelease.ps1"
