@@ -20,4 +20,4 @@
 
 完整离线 runtime 位于独立私有仓库分支和私有 Release。该 runtime 内含上表的受限分离权重，因此必须保持私有，不能仅靠把 Release 从 prerelease 改为正式版来公开；私有状态也不改变“非商业”或“仅研究”等上游使用限制。公开应用核心 ZIP 不携带这些权重；CLAP、Qwen 和 llama.cpp 仍由模型管理器按用户选择直接从固定上游地址下载。
 
-`1.0.0-public-rc4` 仍不把模型权重塞入公开应用 ZIP，但提供合法公开运行时路径：用户点击一键修复后，客户端从官方源取得 FFmpeg、MIT 的 MSST 与 MVSep Mega 53-stem v1、Apache-2.0 的 Basic Pitch、MIT 的 TransKun，并对固定资产执行校验。旧的许可不明、非商业或仅研究权重不会被一键修复自动下载；已有权使用它们的用户仍可继续绑定自己的本地环境。
+`1.0.0-public-rc5` 仍不把模型权重塞入公开应用 ZIP，但提供合法公开运行时路径：用户点击一键修复后，客户端从官方源取得 FFmpeg、MIT 的 MSST 与 MVSep Mega 53-stem v1、Apache-2.0 的 Basic Pitch、MIT 的 TransKun，并对固定资产执行校验。旧的许可不明、非商业或仅研究权重不会被一键修复自动下载；已有权使用它们的用户仍可继续绑定自己的本地环境。

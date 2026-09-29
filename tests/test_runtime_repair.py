@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import hashlib
+import io
 from pathlib import Path
 import os
+import threading
+import time
+from urllib.error import HTTPError
 import wave
 
 import pytest
@@ -147,3 +152,155 @@ def test_source_conversion_still_rejects_unusable_output(tmp_path: Path, monkeyp
     with pytest.raises(RuntimeError, match="无法解码出可用内容"):
         convert_to_wav(source, target, lambda _message: None)
     assert not target.exists()
+
+
+class _FakeResponse:
+    def __init__(self, data: bytes, status: int = 200, headers: dict[str, str] | None = None, delay: float = 0.0):
+        self._stream = io.BytesIO(data)
+        self._status = status
+        self.headers = headers or {}
+        self._delay = delay
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def getcode(self) -> int:
+        return self._status
+
+    def read(self, size: int = -1) -> bytes:
+        if self._delay:
+            time.sleep(self._delay)
+        return self._stream.read(size)
+
+
+def test_runtime_download_discards_oversized_partial_before_request(tmp_path: Path, monkeypatch) -> None:
+    data = b"correct-model-data"
+    target = tmp_path / "model.ckpt"
+    part = target.with_name(target.name + ".part")
+    part.write_bytes(data + b"duplicated-bytes")
+    requests = []
+
+    def fake_urlopen(request, timeout=60):
+        requests.append((request, timeout))
+        assert request.headers.get("Range") is None
+        return _FakeResponse(data)
+
+    monkeypatch.setattr("stemscore.runtime_repair.urlopen", fake_urlopen)
+    messages: list[str] = []
+    RuntimeRepairer._download_verified(
+        "https://example.invalid/model.ckpt",
+        target,
+        len(data),
+        hashlib.sha256(data).hexdigest(),
+        messages.append,
+    )
+
+    assert target.read_bytes() == data
+    assert len(requests) == 1
+    assert any("异常断点文件" in message for message in messages)
+
+
+def test_runtime_download_recovers_from_http_416_by_restarting(tmp_path: Path, monkeypatch) -> None:
+    data = b"0123456789abcdef"
+    target = tmp_path / "model.ckpt"
+    part = target.with_name(target.name + ".part")
+    part.write_bytes(data[:7])
+    calls = 0
+
+    def fake_urlopen(request, timeout=60):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            assert request.headers.get("Range") == "bytes=7-"
+            raise HTTPError(request.full_url, 416, "range invalid", {}, None)
+        assert request.headers.get("Range") is None
+        return _FakeResponse(data)
+
+    monkeypatch.setattr("stemscore.runtime_repair.urlopen", fake_urlopen)
+    messages: list[str] = []
+    RuntimeRepairer._download_verified(
+        "https://example.invalid/model.ckpt",
+        target,
+        len(data),
+        hashlib.sha256(data).hexdigest(),
+        messages.append,
+    )
+
+    assert calls == 2
+    assert target.read_bytes() == data
+    assert any("HTTP 416" in message for message in messages)
+
+
+def test_runtime_download_rejects_mismatched_content_range(tmp_path: Path, monkeypatch) -> None:
+    data = b"abcdefghij"
+    target = tmp_path / "model.ckpt"
+    part = target.with_name(target.name + ".part")
+    part.write_bytes(data[:4])
+    calls = 0
+
+    def fake_urlopen(request, timeout=60):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return _FakeResponse(
+                data[4:],
+                status=206,
+                headers={"Content-Range": f"bytes 3-{len(data) - 1}/{len(data)}"},
+            )
+        assert request.headers.get("Range") is None
+        return _FakeResponse(data)
+
+    monkeypatch.setattr("stemscore.runtime_repair.urlopen", fake_urlopen)
+    RuntimeRepairer._download_verified(
+        "https://example.invalid/model.ckpt",
+        target,
+        len(data),
+        hashlib.sha256(data).hexdigest(),
+        lambda _message: None,
+    )
+
+    assert calls == 2
+    assert target.read_bytes() == data
+
+
+def test_runtime_download_serializes_concurrent_repair_workers(tmp_path: Path, monkeypatch) -> None:
+    data = b"x" * (2 * 1024 * 1024)
+    target = tmp_path / "model.ckpt"
+    calls = 0
+    calls_lock = threading.Lock()
+
+    def fake_urlopen(_request, timeout=60):
+        nonlocal calls
+        with calls_lock:
+            calls += 1
+        return _FakeResponse(data, delay=0.03)
+
+    monkeypatch.setattr("stemscore.runtime_repair.urlopen", fake_urlopen)
+    errors: list[Exception] = []
+
+    def worker() -> None:
+        try:
+            RuntimeRepairer._download_verified(
+                "https://example.invalid/model.ckpt",
+                target,
+                len(data),
+                hashlib.sha256(data).hexdigest(),
+                lambda _message: None,
+            )
+        except Exception as error:
+            errors.append(error)
+
+    first = threading.Thread(target=worker)
+    second = threading.Thread(target=worker)
+    first.start()
+    time.sleep(0.01)
+    second.start()
+    first.join(timeout=5)
+    second.join(timeout=5)
+
+    assert errors == []
+    assert calls == 1
+    assert target.read_bytes() == data
