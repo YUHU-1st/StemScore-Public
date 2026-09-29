@@ -2,7 +2,7 @@
 
 StemScore 是完全本地运行的 Windows 客户端，复用用户已有且有权使用的 MSST-GUI / UVR 环境，按五步人工审查流程完成：音乐导入 → 人声/伴奏 → 主唱/和声/乐器分轨 → 选择性去混响 → 各轨 MIDI。每一步保存命令、模型与产物 SHA-256、参数和日志，并在用户点击审查通过前停止。
 
-`1.0.0-public-rc4` 是可公开分发的核心版。应用包本身不携带模型权重或预装 Python/CUDA runtime；缺少运行环境时，客户端会提供“一键修复运行环境”，从固定的官方公开源安装 FFmpeg、MSST、GPU 运行时、MIT 许可的 MVSep Mega 53-stem v1、Basic Pitch 与 TransKun，并在固定下载资产上执行校验。完整离线私有模型包仍因部分旧权重未声明再分发许可、仅限研究或仅限非商业使用而保持私有。
+`1.0.0-public-rc5` 是可公开分发的核心版。应用包本身不携带模型权重或预装 Python/CUDA runtime；缺少运行环境时，客户端会提供“一键修复运行环境”，从固定的官方公开源安装 FFmpeg、MSST、GPU 运行时、MIT 许可的 MVSep Mega 53-stem v1、Basic Pitch 与 TransKun，并在固定下载资产上执行校验。RC5 同时修复大模型断点续传：并发修复任务不会再同时写同一个 `.part`，异常超长断点、HTTP 416 和不一致的 `Content-Range` 会自动自愈。完整离线私有模型包仍因部分旧权重未声明再分发许可、仅限研究或仅限非商业使用而保持私有。
 
 RC3 增加运行时报错后的自动修复：全新 Windows 机器可以先安装并启动公开客户端，在首次遇到缺失运行环境时一键补齐合法公开组件，完成后自动重试失败步骤。当前五步主流程已经不再把未使用的 UVR/Demucs 目录当作硬依赖。
 
@@ -41,9 +41,9 @@ py -3.12 -m venv .venv312
 公开构建：
 
 ```powershell
-.\build_stemscore.ps1 -Version 1.0.0-public-rc4
+.\build_stemscore.ps1 -Version 1.0.0-public-rc5
 powershell -NoProfile -ExecutionPolicy Bypass -File .\packaging\Build-StemScoreGpuRelease.ps1 `
-  -Version 1.0.0-public-rc4 -PublicSafe
+  -Version 1.0.0-public-rc5 -PublicSafe
 ```
 
 `-PublicSafe` 禁止传入 runtime payload，并拒绝应用目录内的常见模型权重文件。不要把自己导入的模型、音乐、训练数据、项目输出或运行日志提交到公开仓库或 Release。
