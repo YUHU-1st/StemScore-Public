@@ -281,7 +281,8 @@ def test_public_safe_deployer_rejects_missing_runtime_binding(tmp_path: Path) ->
 def test_transcription_setup_does_not_require_msst_before_basic_pitch() -> None:
     repository = Path(__file__).resolve().parents[1]
     script = (repository / "tools" / "setup_stemscore_runtime.ps1").read_text(encoding="utf-8")
-    assert "[Parameter(Mandatory)]" not in script
+    assert "[Parameter(Mandatory)]\n    [string]$MsstRoot" not in script
+    assert "[string]$MsstRoot" in script
     assert "Basic Pitch is ready; TransKun was skipped" in script
     assert "Invoke-NativeChecked" in script
 
