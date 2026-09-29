@@ -22,6 +22,8 @@ UV_SIZE = 17_955_780
 UV_SHA256 = "6dbb02d79e419522f1c500f0adb1cddcff0cda7d59b0d66ea7f5e3b4a1b2f5f0"
 
 MSST_VERSION = "0.1.0"
+FFMPEG_WINGET_ID = "Gyan.FFmpeg"
+FFMPEG_WINGET_VERSION = "8.1.2"
 MEGA53_CONFIG_URL = "https://github.com/ZFTurbo/Music-Source-Separation-Training/releases/download/v1.0.21/mvsep_mega_model_bs_roformer_53_stems.yaml"
 MEGA53_CONFIG_SIZE = 4_184
 MEGA53_CONFIG_SHA256 = "7e198062a251587088adb91215a4f44ab59e67bd62fcc805cf54d6e7dfc51103"
@@ -68,6 +70,7 @@ def is_repairable_runtime_error(error: Exception | str) -> bool:
             "TransKun V2 本地运行时未安装",
             "未找到必需程序：ffmpeg",
             "未找到必需程序：ffprobe",
+            "ffmpeg / ffprobe",
         )
     )
 
@@ -97,7 +100,8 @@ class RuntimeRepairer:
         log("一键修复完成：MSST、MVSep Mega 53-stem、Basic Pitch 与 TransKun 已通过检查。")
 
     def _ensure_ffmpeg(self, log: LogCallback) -> None:
-        links = Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft" / "WinGet" / "Links"
+        local_app_data = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
+        links = local_app_data / "Microsoft" / "WinGet" / "Links"
         if links.is_dir():
             entries = os.environ.get("PATH", "").split(os.pathsep)
             if str(links).casefold() not in {entry.casefold() for entry in entries}:
@@ -107,13 +111,26 @@ class RuntimeRepairer:
             return
         winget = shutil.which("winget")
         if not winget:
-            raise RuntimeError("缺少 ffmpeg/ffprobe，且系统未找到 WinGet，无法执行一键安装。")
-        log("未找到 FFmpeg，正在通过 Windows WinGet 官方源安装 Gyan.FFmpeg。")
+            windows_apps = local_app_data / "Microsoft" / "WindowsApps" / "winget.exe"
+            if windows_apps.is_file():
+                winget = str(windows_apps)
+        if not winget:
+            raise RuntimeError(
+                "缺少 ffmpeg/ffprobe，且系统未找到 Windows Package Manager (winget)。"
+                "请先从 Microsoft Store 安装/更新“应用安装程序”，然后再次点击一键修复。"
+            )
+        log(
+            f"未找到 FFmpeg，正在通过 Windows Package Manager 官方索引安装 "
+            f"{FFMPEG_WINGET_ID} {FFMPEG_WINGET_VERSION}。"
+        )
         self._run(
             Path(winget),
             [
-                "install", "--id", "Gyan.FFmpeg", "--exact", "--source", "winget",
-                "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity",
+                "install", "--id", FFMPEG_WINGET_ID,
+                "--version", FFMPEG_WINGET_VERSION,
+                "--exact", "--source", "winget",
+                "--accept-package-agreements", "--accept-source-agreements",
+                "--silent", "--disable-interactivity",
             ],
             log,
         )

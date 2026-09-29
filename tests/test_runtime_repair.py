@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 
 import pytest
 
@@ -13,6 +14,7 @@ from stemscore.runtime_repair import (
     RTX40_PROFILE,
     RTX50_PROFILE,
     UV_SHA256,
+    RuntimeRepairer,
     is_repairable_runtime_error,
     profile_for_compute_capability,
 )
@@ -69,6 +71,7 @@ def test_core_validation_no_longer_requires_unused_uvr_demucs(tmp_path: Path, mo
         "TransKun V2 本地运行时未安装。",
         "未找到必需程序：ffmpeg",
         "未找到必需程序：ffprobe",
+        "本地运行环境不完整：\nffmpeg / ffprobe",
     ],
 )
 def test_known_runtime_failures_offer_one_click_repair(message: str) -> None:
@@ -77,6 +80,23 @@ def test_known_runtime_failures_offer_one_click_repair(message: str) -> None:
 
 def test_audio_decode_failure_does_not_offer_runtime_repair() -> None:
     assert not is_repairable_runtime_error("Decoding error: Invalid data found when processing input")
+
+
+def test_ffmpeg_repair_refreshes_existing_winget_links(tmp_path: Path, monkeypatch) -> None:
+    runtime = LocalRuntime(tmp_path / "msst", tmp_path / "uvr", tmp_path / "transcription")
+    repairer = RuntimeRepairer(runtime)
+    links = tmp_path / "Local" / "Microsoft" / "WinGet" / "Links"
+    links.mkdir(parents=True)
+    (links / "ffmpeg.exe").write_bytes(b"")
+    (links / "ffprobe.exe").write_bytes(b"")
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "Local"))
+    monkeypatch.setenv("PATH", "")
+
+    messages: list[str] = []
+    repairer._ensure_ffmpeg(messages.append)
+
+    assert str(links) in os.environ["PATH"]
+    assert any("FFmpeg 已就绪" in message for message in messages)
 
 
 def test_source_conversion_treats_decoder_errors_as_source_file_failures(
