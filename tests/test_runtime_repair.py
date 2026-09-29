@@ -67,6 +67,8 @@ def test_core_validation_no_longer_requires_unused_uvr_demucs(tmp_path: Path, mo
         "MSST 文件不存在：model.ckpt",
         "Basic Pitch 本地运行时未安装。",
         "TransKun V2 本地运行时未安装。",
+        "未找到必需程序：ffmpeg",
+        "未找到必需程序：ffprobe",
     ],
 )
 def test_known_runtime_failures_offer_one_click_repair(message: str) -> None:

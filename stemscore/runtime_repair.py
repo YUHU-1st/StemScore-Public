@@ -66,6 +66,8 @@ def is_repairable_runtime_error(error: Exception | str) -> bool:
             "MSST 运行环境",
             "Basic Pitch 本地运行时未安装",
             "TransKun V2 本地运行时未安装",
+            "未找到必需程序：ffmpeg",
+            "未找到必需程序：ffprobe",
         )
     )
 
