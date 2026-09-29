@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 import hashlib
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import time
 from typing import Callable
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 import zipfile
 
@@ -15,6 +18,61 @@ from .inventory import LocalRuntime
 
 
 LogCallback = Callable[[str], None]
+
+
+class _RestartDownload(RuntimeError):
+    pass
+
+
+@contextmanager
+def _exclusive_download_lock(part: Path, log: LogCallback):
+    """Serialize writers for one .part file, including across StemScore processes."""
+    lock = part.with_name(part.name + ".lock")
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    handle = lock.open("a+b")
+    handle.seek(0, os.SEEK_END)
+    if handle.tell() == 0:
+        handle.write(b"0")
+        handle.flush()
+    waiting_logged = False
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            while True:
+                try:
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                    break
+                except OSError:
+                    if not waiting_logged:
+                        log(f"检测到另一个修复任务正在下载 {part.stem}，等待其完成后复用结果…")
+                        waiting_logged = True
+                    time.sleep(1)
+            try:
+                yield
+            finally:
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            while True:
+                try:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if not waiting_logged:
+                        log(f"检测到另一个修复任务正在下载 {part.stem}，等待其完成后复用结果…")
+                        waiting_logged = True
+                    time.sleep(1)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    finally:
+        handle.close()
+
 
 UV_VERSION = "0.12.19"
 UV_URL = f"https://github.com/astral-sh/uv/releases/download/{UV_VERSION}/uv-x86_64-pc-windows-msvc.zip"
@@ -295,66 +353,139 @@ class RuntimeRepairer:
         expected_sha256: str,
         log: LogCallback,
     ) -> None:
-        if destination.is_file() and destination.stat().st_size == expected_size:
-            if _sha256(destination) == expected_sha256:
-                log(f"已存在并通过 SHA-256：{destination.name}")
-                return
-            destination.unlink()
         destination.parent.mkdir(parents=True, exist_ok=True)
         part = destination.with_name(destination.name + ".part")
-        if part.exists() and part.stat().st_size > expected_size:
-            part.unlink()
-        if part.is_file() and part.stat().st_size == expected_size:
-            if _sha256(part) == expected_sha256:
-                os.replace(part, destination)
-                log(f"断点文件已完整并通过 SHA-256：{destination.name}")
+        with _exclusive_download_lock(part, log):
+            if destination.is_file():
+                if destination.stat().st_size == expected_size and _sha256(destination) == expected_sha256:
+                    log(f"已存在并通过 SHA-256：{destination.name}")
+                    return
+                log(f"现有文件大小或 SHA-256 不匹配，重新获取：{destination.name}")
+                destination.unlink(missing_ok=True)
+
+            def normalize_partial() -> bool:
+                """Return True when the completed file is ready and installed."""
+                if not part.is_file():
+                    return False
+                size = part.stat().st_size
+                if size > expected_size:
+                    log(
+                        f"发现异常断点文件：{size / 1024 / 1024:.1f} MiB > "
+                        f"{expected_size / 1024 / 1024:.1f} MiB；自动删除并从头重下。"
+                    )
+                    part.unlink(missing_ok=True)
+                    return False
+                if size == expected_size:
+                    actual_hash = _sha256(part)
+                    if actual_hash == expected_sha256:
+                        os.replace(part, destination)
+                        log(f"断点文件已完整并通过 SHA-256：{destination.name}")
+                        return True
+                    log(f"完整断点文件 SHA-256 不匹配，自动删除并从头重下：{destination.name}")
+                    part.unlink(missing_ok=True)
+                return False
+
+            if normalize_partial():
                 return
-            part.unlink()
-        for attempt in range(4):
-            offset = part.stat().st_size if part.exists() else 0
-            request = Request(url, headers={"User-Agent": "StemScore-runtime-repair/1.0"})
-            if offset:
-                request.add_header("Range", f"bytes={offset}-")
-            log(f"下载 {destination.name}：{offset / 1024 / 1024:.1f} / {expected_size / 1024 / 1024:.1f} MiB")
-            started = time.monotonic()
-            last_report = offset
-            try:
-                with urlopen(request, timeout=60) as response:
-                    status = response.getcode()
-                    mode = "ab" if offset and status == 206 else "wb"
-                    if mode == "wb":
-                        offset = 0
-                    with part.open(mode) as handle:
-                        downloaded = offset
-                        while downloaded < expected_size:
-                            block = response.read(min(1024 * 1024, expected_size - downloaded))
-                            if not block:
-                                break
-                            handle.write(block)
-                            downloaded += len(block)
-                            if downloaded - last_report >= 64 * 1024 * 1024 or downloaded == expected_size:
-                                elapsed = max(time.monotonic() - started, 0.001)
-                                speed = (downloaded - offset) / elapsed / 1024 / 1024
-                                log(f"下载 {destination.name}：{downloaded / 1024 / 1024:.1f} MiB / {expected_size / 1024 / 1024:.1f} MiB，{speed:.1f} MiB/s")
-                                last_report = downloaded
-            except Exception as error:
-                if attempt == 3:
-                    raise RuntimeError(f"下载失败：{destination.name}：{error}") from error
-                log(f"下载连接中断，2 秒后从断点继续（{attempt + 1}/3）：{error}")
-                time.sleep(2)
-                continue
-            if part.is_file() and part.stat().st_size == expected_size:
-                break
-            if attempt == 3:
-                break
-            log(f"下载未完成，2 秒后从断点继续（{attempt + 1}/3）。")
-            time.sleep(2)
-        actual_size = part.stat().st_size if part.exists() else 0
-        if actual_size != expected_size:
-            raise RuntimeError(f"下载大小不匹配：{destination.name} ({actual_size} != {expected_size})")
-        actual_hash = _sha256(part)
-        if actual_hash != expected_sha256:
-            part.unlink(missing_ok=True)
-            raise RuntimeError(f"SHA-256 校验失败：{destination.name}")
-        os.replace(part, destination)
-        log(f"SHA-256 校验通过：{destination.name}")
+
+            for attempt in range(5):
+                if normalize_partial():
+                    return
+                offset = part.stat().st_size if part.exists() else 0
+                request = Request(url, headers={"User-Agent": "StemScore-runtime-repair/1.1"})
+                if offset:
+                    request.add_header("Range", f"bytes={offset}-")
+                log(
+                    f"下载 {destination.name}：{offset / 1024 / 1024:.1f} / "
+                    f"{expected_size / 1024 / 1024:.1f} MiB"
+                )
+                started = time.monotonic()
+                session_start = offset
+                last_report = offset
+                try:
+                    with urlopen(request, timeout=60) as response:
+                        status = response.getcode()
+                        mode = "wb"
+                        if offset and status == 206:
+                            content_range = response.headers.get("Content-Range", "")
+                            match = re.fullmatch(r"bytes (\d+)-(\d+)/(\d+|\*)", content_range)
+                            if (
+                                match is None
+                                or int(match.group(1)) != offset
+                                or match.group(3) == "*"
+                                or int(match.group(3)) != expected_size
+                            ):
+                                part.unlink(missing_ok=True)
+                                raise _RestartDownload(
+                                    f"服务器返回了不一致的 Content-Range：{content_range or 'missing'}"
+                                )
+                            mode = "ab"
+                        elif offset and status == 200:
+                            log("服务器未接受断点 Range，将安全地从 0 重新下载，不追加旧数据。")
+                            offset = 0
+                            session_start = 0
+                            mode = "wb"
+                        elif not offset and status in {200, 206}:
+                            if status == 206:
+                                content_range = response.headers.get("Content-Range", "")
+                                match = re.fullmatch(r"bytes (\d+)-(\d+)/(\d+|\*)", content_range)
+                                if (
+                                    match is None
+                                    or int(match.group(1)) != 0
+                                    or match.group(3) == "*"
+                                    or int(match.group(3)) != expected_size
+                                ):
+                                    raise _RestartDownload(
+                                        f"服务器返回了不一致的 Content-Range：{content_range or 'missing'}"
+                                    )
+                        else:
+                            raise RuntimeError(f"服务器返回异常 HTTP 状态：{status}")
+
+                        with part.open(mode) as handle:
+                            downloaded = offset
+                            while downloaded < expected_size:
+                                block = response.read(min(1024 * 1024, expected_size - downloaded))
+                                if not block:
+                                    raise RuntimeError(
+                                        f"连接提前结束：{downloaded} / {expected_size} bytes"
+                                    )
+                                handle.write(block)
+                                downloaded += len(block)
+                                if downloaded - last_report >= 64 * 1024 * 1024 or downloaded == expected_size:
+                                    elapsed = max(time.monotonic() - started, 0.001)
+                                    speed = (downloaded - session_start) / elapsed / 1024 / 1024
+                                    log(
+                                        f"下载 {destination.name}：{downloaded / 1024 / 1024:.1f} MiB / "
+                                        f"{expected_size / 1024 / 1024:.1f} MiB，{speed:.1f} MiB/s"
+                                    )
+                                    last_report = downloaded
+                except HTTPError as error:
+                    if error.code == 416:
+                        current = part.stat().st_size if part.exists() else 0
+                        log(
+                            f"服务器拒绝当前断点（HTTP 416，本地 {current / 1024 / 1024:.1f} MiB）；"
+                            "自动丢弃无效断点并从 0 重新开始。"
+                        )
+                        part.unlink(missing_ok=True)
+                    elif attempt >= 4:
+                        raise RuntimeError(f"下载失败：{destination.name}：{error}") from error
+                    else:
+                        log(f"下载连接中断，2 秒后继续（{attempt + 1}/4）：{error}")
+                except _RestartDownload as error:
+                    log(f"断点响应无效，自动重置下载：{error}")
+                    part.unlink(missing_ok=True)
+                except Exception as error:
+                    if attempt >= 4:
+                        raise RuntimeError(f"下载失败：{destination.name}：{error}") from error
+                    log(f"下载连接中断，2 秒后从安全断点继续（{attempt + 1}/4）：{error}")
+
+                if normalize_partial():
+                    return
+                if attempt < 4:
+                    time.sleep(2)
+
+            actual_size = part.stat().st_size if part.exists() else 0
+            raise RuntimeError(
+                f"下载在多次重试后仍未完成：{destination.name} "
+                f"({actual_size} / {expected_size} bytes)"
+            )
