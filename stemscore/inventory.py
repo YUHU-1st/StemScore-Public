@@ -20,7 +20,13 @@ class LocalRuntime:
 
     @property
     def msst_python(self) -> Path:
-        return self.msst_root / "env" / "python.exe"
+        legacy = self.msst_root / "env" / "python.exe"
+        modern = self.msst_root / "env" / "Scripts" / "python.exe"
+        return legacy if legacy.is_file() else modern
+
+    @property
+    def msst_cli(self) -> Path:
+        return self.msst_root / "env" / "Scripts" / "msst.exe"
 
     @property
     def msst_inference(self) -> Path:
@@ -29,6 +35,14 @@ class LocalRuntime:
     @property
     def demucs_repo(self) -> Path:
         return self.uvr_root / "models" / "Demucs_Models" / "v3_v4_repo"
+
+    @property
+    def public_mega53_config(self) -> Path:
+        return self.msst_root / "configs" / "mvsep_mega_model_bs_roformer_53_stems.yaml"
+
+    @property
+    def public_mega53_checkpoint(self) -> Path:
+        return self.msst_root / "pretrain" / "mvsep_mega_model_bs_roformer_53_stems_v1.ckpt"
 
     @property
     def basic_pitch_exe(self) -> Path:
@@ -81,12 +95,12 @@ class LocalRuntime:
                 external = state.get("externalRuntimeRoots")
                 if (
                     isinstance(external, dict)
-                    and {"msst", "uvr", "transcription"} <= external.keys()
+                    and {"msst", "transcription"} <= external.keys()
                     and state.get("launchReady") is True
                 ):
                     return cls(
                         Path(str(external["msst"])),
-                        Path(str(external["uvr"])),
+                        Path(str(external.get("uvr", DEFAULT_UVR_ROOT))),
                         Path(str(external["transcription"])),
                     )
                 relative = Path(str(state.get("expectedRuntimeDirectory", "")))
@@ -104,8 +118,25 @@ class LocalRuntime:
         return cls(DEFAULT_MSST_ROOT, DEFAULT_UVR_ROOT, DEFAULT_TRANSCRIPTION_ROOT)
 
     def validate_core(self) -> None:
-        required = [self.msst_python, self.msst_inference, self.demucs_repo]
-        missing = [str(path) for path in required if not path.exists()]
+        missing: list[str] = []
+        if not self.msst_python.is_file():
+            missing.append(str(self.msst_python))
+        if not self.msst_cli.is_file() and not self.msst_inference.is_file():
+            missing.append(f"MSST 推理入口：{self.msst_cli} 或 {self.msst_inference}")
+        public_model_ready = self.public_mega53_config.is_file() and self.public_mega53_checkpoint.is_file()
+        legacy_model_ready = all(
+            path.is_file()
+            for path in (
+                self.msst_root / "configs" / "BS-Roformer-Resurrection-Config.yaml",
+                self.msst_root / "pretrain" / "BS-Roformer-Resurrection.ckpt",
+                self.msst_root / "configs" / "config_karaoke_frazer_becruily.yaml",
+                self.msst_root / "pretrain" / "bs_roformer_karaoke_frazer_becruily.ckpt",
+                self.msst_root / "configs" / "BS-Rofo-SW-Fixed.yaml",
+                self.msst_root / "pretrain" / "BS-Rofo-SW-Fixed.ckpt",
+            )
+        )
+        if not public_model_ready and not legacy_model_ready:
+            missing.extend([str(self.public_mega53_config), str(self.public_mega53_checkpoint)])
         if shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None:
             missing.append("ffmpeg / ffprobe")
         if missing:
@@ -143,6 +174,11 @@ class LocalRuntime:
             "msst_root": str(self.msst_root),
             "uvr_root": str(self.uvr_root),
             "transcription_root": str(self.transcription_root),
+            "public_mega53_ready": self.public_mega53_config.is_file() and self.public_mega53_checkpoint.is_file(),
+            "public_mega53_checkpoint": str(self.public_mega53_checkpoint),
+            "public_mega53_checkpoint_sha256": (
+                sha256_file(self.public_mega53_checkpoint) if self.public_mega53_checkpoint.is_file() else None
+            ),
             "basic_pitch_ready": self.basic_pitch_python.is_file(),
             "basic_pitch_model": str(self.basic_pitch_model),
             "basic_pitch_model_sha256": (

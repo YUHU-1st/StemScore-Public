@@ -1,6 +1,6 @@
 # StemScore 公开版安装
 
-StemScore 公开版包含同一套五步客户端、RTX 40/50 运行时选择逻辑、训练 WebUI、音乐分析、模型管理和本地 Music 3 提示词功能，但不包含 MSST、UVR、Basic Pitch、TransKun、CLAP、Qwen 或其他模型权重，也不包含预装 Python/CUDA 运行时。这样可以公开验证源码、应用核心和部署逻辑，而不会再次分发许可不明确、仅限研究或仅限非商业使用的权重。
+StemScore 公开版包含同一套五步客户端、RTX 40/50 运行时选择逻辑、训练 WebUI、音乐分析、模型管理和本地 Music 3 提示词功能，但应用 ZIP 本身不包含模型权重或预装 Python/CUDA 运行时。RC3 在客户端内加入“一键修复运行环境”：缺失组件时才从固定的官方公开源下载许可明确的依赖和模型，并做 SHA-256 校验。
 
 ## 下载与校验
 
@@ -16,11 +16,20 @@ StemScore 公开版包含同一套五步客户端、RTX 40/50 运行时选择逻
 
 先用 `Get-FileHash -Algorithm SHA256` 对照 `SHA256SUMS.txt`。部署脚本还会再次核对 `release-manifest.json` 中记录的字节数与 SHA-256。
 
-## 准备本地运行环境
+## 一键修复运行环境
 
-用户必须自行准备并确认有权使用的 MSST-GUI、UVR 和分离模型。公开版不会自动下载下列受限权重：BS-RoFormer Resurrection、Karaoke Frazer/Becruily、BS-RoFormer SW Fixed、Dereverb/Echo Fused 和 Demucs `htdemucs_6s`。所需文件名与许可边界见 `docs/StemScore-模型许可清单.md`。
+全新机器不需要预先安装 MSST 或 UVR。部署并启动 StemScore 后，如果运行到 AI 分离步骤时检测到本地运行环境不完整，左侧“一键修复运行环境”按钮会变为可用。点击后会自动：
 
-Basic Pitch 可通过公开包内的 `setup_runtime.ps1` 在没有 MSST 的新机器上先行安装。TransKun 需要带 PyTorch/CUDA 的 Python；提供 `-MsstRoot` 时脚本会继续把 TransKun 安装到 StemScore 的独立转写目录。该脚本不下载 MSST/UVR 权重：
+- 检测 RTX 40/50 并选择对应的官方 PyTorch CUDA wheel；
+- 若系统缺少 FFmpeg，则通过 Windows WinGet 的 `Gyan.FFmpeg` 包安装并重新检测；
+- 安装官方 `msst==0.1.0` 与 BS-RoFormer 依赖；
+- 从 ZFTurbo 官方 GitHub Release 下载 MVSep Mega 53-stem v1 配置和权重，并核对固定 SHA-256；
+- 安装 Spotify Basic Pitch 0.4.0 与 TransKun 2.0.1；
+- 修复完成后自动重试刚才失败的步骤。
+
+RC3 不再要求 UVR/Demucs 才能执行当前五步主流程。公开版仍不会自动下载旧的 BS-RoFormer Resurrection、Karaoke Frazer/Becruily、BS-RoFormer SW Fixed、Dereverb/Echo Fused 或 Demucs `htdemucs_6s`；这些旧权重的许可边界保持不变。若没有用户自行准备的许可兼容去混响权重，第 4 步会明确记录“保留原轨”，而不是暗中下载受限模型。
+
+`setup_runtime.ps1` 仍保留为手工维护入口；普通用户优先使用客户端内的一键修复。脚本自身仍只处理 Basic Pitch/TransKun，不会下载旧的受限分离权重：
 
 ```powershell
 # 纯新机：先安装 Basic Pitch；TransKun 会明确提示暂时跳过
@@ -33,19 +42,16 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\setup_runtime.ps1 `
   -RuntimeRoot "$env:LOCALAPPDATA\StemScore\transcription\basic-pitch"
 ```
 
-## 一次部署并绑定现有模型
+## 部署
 
-把三个根目录一次传给部署器。路径仅写入本机 `deployment-state.json`，不会上传：
+RC3 的公开包可以直接部署，不需要先传入外部运行时路径：
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\Deploy-StemScoreGpuPackage.ps1 `
-  -Destination "$env:LOCALAPPDATA\StemScore" `
-  -MsstRoot "C:\你的MSST目录" `
-  -UvrRoot "C:\你的UVR目录" `
-  -TranscriptionRoot "$env:LOCALAPPDATA\StemScore\transcription\basic-pitch"
+  -Destination "$env:LOCALAPPDATA\StemScore"
 ```
 
-部署器会自动读取 NVIDIA 型号、Compute Capability 与驱动版本，选择 RTX 40 `cu126` 或 RTX 50 `cu128` profile，并检查应用包与本地运行目录。三个路径必须同时提供；必需文件缺失时部署会停止并列出缺失路径。公开包没有内置运行时且未传入三个本地运行时路径时，部署器现在会直接报错并停止，不再留下一个 `launchReady=false` 的半安装目录。
+部署器会自动读取 NVIDIA 型号、Compute Capability 与驱动版本，选择 RTX 40 `cu126` 或 RTX 50 `cu128` profile，并检查应用包。如果公开包没有预装运行时，`deployment-state.json` 会写入 `runtimeRepairRequired=true`，客户端仍可正常启动并在需要时执行一键修复。已有合法私有环境的用户可传 `-MsstRoot` 与 `-TranscriptionRoot`；`-UvrRoot` 仅为旧环境兼容保留，RC3 不再要求它存在。
 
 部署成功后运行：
 

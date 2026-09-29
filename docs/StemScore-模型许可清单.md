@@ -4,6 +4,7 @@
 
 | 资产 | 来源与许可 | 当前发布决定 |
 | --- | --- | --- |
+| MVSep Mega 53 Stems v1 | [ZFTurbo v1.0.21 Release](https://github.com/ZFTurbo/Music-Source-Separation-Training/releases/tag/v1.0.21)；上游作者在 [#245](https://github.com/ZFTurbo/Music-Source-Separation-Training/issues/245#issuecomment-5834608838) 明确将 53-stem 权重以 MIT 发布，同时声明不对训练数据相关权利主张提供担保 | RC3 一键修复从官方 Release 下载并固定 SHA-256；不预装进应用 ZIP |
 | BS-RoFormer Resurrection | [pcunwa/BS-Roformer-Resurrection](https://huggingface.co/pcunwa/BS-Roformer-Resurrection)，未声明权重许可 | 仅进入 `localOnly=true` 私有运行时；公开版必须移除或取得书面许可 |
 | Karaoke Frazer/Becruily | [becruily/bs-roformer-karaoke](https://huggingface.co/becruily/bs-roformer-karaoke)，未声明权重许可 | 仅进入私有运行时；公开版必须移除或取得书面许可 |
 | BS-Rofo-SW-Fixed | [enerjazzer/BS-ROFO-SW-Fixed](https://huggingface.co/enerjazzer/BS-ROFO-SW-Fixed)，上游标为 `unknown` | 仅进入私有运行时；公开版必须移除或取得权利人许可 |
@@ -19,4 +20,4 @@
 
 完整离线 runtime 位于独立私有仓库分支和私有 Release。该 runtime 内含上表的受限分离权重，因此必须保持私有，不能仅靠把 Release 从 prerelease 改为正式版来公开；私有状态也不改变“非商业”或“仅研究”等上游使用限制。公开应用核心 ZIP 不携带这些权重；CLAP、Qwen 和 llama.cpp 仍由模型管理器按用户选择直接从固定上游地址下载。
 
-`1.0.0-public-rc2` 采用第二条路径：发布不含这些权重的核心客户端，让用户绑定自己有权使用的本地运行环境。任何公开资产都要重新生成清单和 SHA-256，不能复用私有 runtime 的发布声明。
+`1.0.0-public-rc3` 仍不把模型权重塞入公开应用 ZIP，但新增合法公开运行时路径：用户点击一键修复后，客户端从官方源取得 MIT 的 MSST 与 MVSep Mega 53-stem v1、Apache-2.0 的 Basic Pitch、MIT 的 TransKun，并对固定资产执行 SHA-256 校验。旧的许可不明、非商业或仅研究权重不会被一键修复自动下载；已有权使用它们的用户仍可继续绑定自己的本地环境。

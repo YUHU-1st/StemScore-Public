@@ -8,7 +8,7 @@ import shutil
 from typing import Callable
 import uuid
 
-from .audio import convert_to_wav, high_frequency_balance_db, mean_volume_db, probe_audio, validate_durations, volume_stats_db
+from .audio import convert_to_wav, high_frequency_balance_db, mean_volume_db, mix_audio, probe_audio, subtract_audio, validate_durations, volume_stats_db
 from .backends import demucs, msst, transcription
 from .constants import PROJECT_FILE, STAGE_DIRS, STAGE_NAMES
 from .inventory import LocalRuntime
@@ -24,6 +24,15 @@ TRANSIENT_MAX_CREST_FACTOR_LOSS_DB = 3.0
 ALL_DEREVERB_ROLES = ("lead_vocal", "harmony_vocal", "bass", "drums", "guitar", "piano", "other")
 DEFAULT_DEREVERB_ROLES = ("lead_vocal",)
 HIGH_FREQUENCY_PROTECTED_ROLES = {"lead_vocal", "harmony_vocal", "drums", "guitar", "piano", "other"}
+
+PUBLIC_MEGA53_GROUPS = {
+    "lead_vocal": ("lead-vocal", "vocal"),
+    "harmony_vocal": ("back-vocal",),
+    "bass": ("bass", "double-bass"),
+    "drums": ("drums", "kick", "snare", "hh", "toms", "percussion", "congas", "tambourine", "timpani", "triangle"),
+    "guitar": ("guitar", "acoustic-guitar", "electric-guitar", "dobro", "banjo", "mandolin", "sitar", "ukulele"),
+    "piano": ("piano", "digital-piano", "keys", "harpsichord", "organ"),
+}
 
 
 def dereverb_quality_status(
@@ -216,25 +225,54 @@ class Workflow:
         self.runtime.validate_core()
         source = self._artifact_by_role(1, "source")
         output = self.root / STAGE_DIRS[2]
-        files, command = msst.separate(
-            self.runtime,
-            source,
-            output,
-            msst.VOCAL_MODEL,
-            {
-                "primary": f"{self._prefix(2)}_vocals.wav",
-                "complement": f"{self._prefix(2)}_accompaniment.wav",
-            },
-            log,
+        legacy_ready = all(
+            msst.model_available(self.runtime, model)
+            for model in (msst.VOCAL_MODEL, msst.KARAOKE_MODEL, msst.SIX_STEM_MODEL)
         )
-        stage.commands.append(command)
-        stage.models.append(msst.model_evidence(self.runtime, msst.VOCAL_MODEL))
+        if legacy_ready:
+            files, command = msst.separate(
+                self.runtime,
+                source,
+                output,
+                msst.VOCAL_MODEL,
+                {
+                    "primary": f"{self._prefix(2)}_vocals.wav",
+                    "complement": f"{self._prefix(2)}_accompaniment.wav",
+                },
+                log,
+            )
+            stage.commands.append(command)
+            stage.models.append(msst.model_evidence(self.runtime, msst.VOCAL_MODEL))
+            self.manifest.settings["separation_backend"] = "legacy-private"
+        else:
+            cache = self.root / "audit" / "mega53-stems"
+            if cache.exists():
+                shutil.rmtree(cache)
+            raw_stems, command = msst.separate_all(
+                self.runtime, source, cache, msst.PUBLIC_MEGA53_MODEL, log
+            )
+            vocals = output / f"{self._prefix(2)}_vocals.wav"
+            accompaniment = output / f"{self._prefix(2)}_accompaniment.wav"
+            vocal_sources = [raw_stems[name] for name in ("lead-vocal", "back-vocal", "vocal") if name in raw_stems]
+            if not vocal_sources:
+                raise RuntimeError("MVSep Mega 53-stem 未生成任何人声轨。")
+            mix_command = mix_audio(vocal_sources, vocals, log)
+            subtract_command = subtract_audio(source, vocals, accompaniment, log)
+            files = [vocals, accompaniment]
+            stage.commands.extend([command, mix_command, subtract_command])
+            stage.models.append(msst.model_evidence(self.runtime, msst.PUBLIC_MEGA53_MODEL))
+            self.manifest.settings["separation_backend"] = "public-mega53-v1"
+            self.manifest.save()
         self._add_audio(stage, files[0], "vocals")
         self._add_audio(stage, files[1], "accompaniment")
         validation = validate_durations(files)
         stage.explanation.extend(
             [
-                "MSST BS-RoFormer 直接预测人声；伴奏由归一化前混音减去预测人声得到，避免再次编码。",
+                (
+                    "使用用户已有的私有 MSST 人声模型分离人声与伴奏。"
+                    if legacy_ready
+                    else "使用 MIT 许可的 MVSep Mega 53-stem v1；lead-vocal、back-vocal、vocal 合成为人声，伴奏由原混音减去人声得到。"
+                ),
                 f"两轨时长差 {validation['duration_spread_seconds']:.6f} 秒。",
             ]
         )
@@ -243,6 +281,51 @@ class Workflow:
         vocals = self._artifact_by_role(2, "vocals")
         accompaniment = self._artifact_by_role(2, "accompaniment")
         output = self.root / STAGE_DIRS[3]
+        if self.manifest.settings.get("separation_backend") == "public-mega53-v1":
+            cache = self.root / "audit" / "mega53-stems"
+            raw_stems = {
+                path.stem.removeprefix("track_"): path
+                for path in cache.glob("track_*.wav")
+            }
+            if not raw_stems:
+                raise RuntimeError("MVSep Mega 53-stem 缓存不存在；请重试第 2 步。")
+            grouped: dict[str, Path] = {}
+            commands: list[list[str]] = []
+            for role, names in PUBLIC_MEGA53_GROUPS.items():
+                sources = [raw_stems[name] for name in names if name in raw_stems]
+                if not sources:
+                    raise RuntimeError(f"MVSep Mega 53-stem 缺少 {role} 所需分轨：{', '.join(names)}")
+                target = output / f"{self._prefix(3)}_{role}.wav"
+                commands.append(mix_audio(sources, target, log))
+                grouped[role] = target
+            known_instruments = output / ".known-instruments.wav"
+            commands.append(
+                mix_audio(
+                    [grouped[role] for role in ("bass", "drums", "guitar", "piano")],
+                    known_instruments,
+                    log,
+                )
+            )
+            other = output / f"{self._prefix(3)}_other.wav"
+            commands.append(subtract_audio(accompaniment, known_instruments, other, log))
+            known_instruments.unlink(missing_ok=True)
+            stage.commands.extend(commands)
+            stage.models.append(msst.model_evidence(self.runtime, msst.PUBLIC_MEGA53_MODEL))
+            self._add_audio(stage, grouped["lead_vocal"], "lead_vocal")
+            self._add_audio(stage, grouped["harmony_vocal"], "harmony_vocal")
+            for role in ("bass", "drums", "guitar", "piano"):
+                self._add_audio(stage, grouped[role], role)
+            self._add_audio(stage, other, "other")
+            files = [grouped["lead_vocal"], grouped["harmony_vocal"], grouped["bass"], grouped["drums"], grouped["guitar"], grouped["piano"], other]
+            validation = validate_durations(files, tolerance_seconds=0.2)
+            stage.explanation.extend(
+                [
+                    "沿用第 2 步一次生成的 MVSep Mega 53-stem v1 原始分轨，不重复加载 1.37 GB 模型。",
+                    "lead-vocal/vocal 合为主唱，back-vocal 为和声；低音、鼓、吉他和键盘按 53-stem 标签聚合，其余伴奏残差作为 other。",
+                    f"七轨最大时长差 {validation['duration_spread_seconds']:.6f} 秒。",
+                ]
+            )
+            return
         vocal_files, vocal_command = msst.separate(
             self.runtime,
             vocals,
@@ -294,6 +377,7 @@ class Workflow:
         rejected: list[str] = []
         skipped: list[str] = []
         bypassed: list[str] = []
+        unavailable: list[str] = []
         selected_roles = set(self.manifest.settings.get("dereverb_roles", DEFAULT_DEREVERB_ROLES))
         for artifact in inputs:
             target_name = f"{self._prefix(4)}_{artifact.role}_dry.wav"
@@ -334,6 +418,25 @@ class Workflow:
                         "dereverb_accepted": False,
                         "quality_status": "bypassed_by_role_policy",
                         "quality_gate": "role not selected for dereverb; original stem preserved for MIDI",
+                    },
+                )
+                continue
+            if not msst.model_available(self.runtime, msst.DEREVERB_MODEL):
+                shutil.copy2(Path(artifact.path), target_path)
+                generated.append(target_path)
+                unavailable.append(artifact.role)
+                log(f"未安装许可兼容的去混响模型，保留原分轨：{artifact.role}")
+                self._add_audio(
+                    stage,
+                    target_path,
+                    f"{artifact.role}_dry",
+                    {
+                        "source_mean_volume_db": source_level,
+                        "candidate_mean_volume_db": None,
+                        "output_mean_volume_db": source_level,
+                        "dereverb_accepted": False,
+                        "quality_status": "bypassed_no_permissive_dereverb_model",
+                        "quality_gate": "no auto-downloadable permissively licensed dereverb checkpoint configured",
                     },
                 )
                 continue
@@ -406,6 +509,7 @@ class Workflow:
                 "本地 MelBand-RoFormer 只为已选择角色生成候选；平均电平损失超过 6 dB、受保护角色在 6 kHz 以上相对能量损失超过 4 dB，或峰均比下降超过 3 dB时自动拒绝。",
                 f"本次质量门回退轨道：{', '.join(rejected) if rejected else '无'}；回退轨保留第 3 步原始分轨并明确写入元数据。",
                 f"按角色策略跳过去混响轨道：{', '.join(bypassed) if bypassed else '无'}。",
+                f"因未安装许可兼容去混响模型而保留原轨：{', '.join(unavailable) if unavailable else '无'}。",
                 f"近静音跳过去混响轨道：{', '.join(skipped) if skipped else '无'}。",
                 f"去混响轨最大时长差 {validation['duration_spread_seconds']:.6f} 秒。",
             ]

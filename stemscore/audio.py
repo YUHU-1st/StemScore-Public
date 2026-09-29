@@ -66,9 +66,70 @@ def convert_to_wav(source: Path, target: Path, log: LogCallback) -> list[str]:
         "-hide_banner",
         "-loglevel",
         "warning",
+        "-xerror",
         "-y",
         "-i",
         str(source),
+        "-ar",
+        "44100",
+        "-ac",
+        "2",
+        "-c:a",
+        "pcm_s24le",
+        str(target),
+    ]
+    try:
+        run_logged(command, log)
+    except RuntimeError as error:
+        target.unlink(missing_ok=True)
+        raise RuntimeError(
+            f"源音频无法完整解码：{source}。文件可能损坏、下载不完整或包含无效音频帧；"
+            "请先用播放器确认整曲可正常播放，或重新获取/转码源文件后再试。"
+        ) from error
+    return command
+
+
+def mix_audio(sources: list[Path], target: Path, log: LogCallback) -> list[str]:
+    if not sources:
+        raise ValueError("至少需要一个音频输入。")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if len(sources) == 1:
+        shutil.copy2(sources[0], target)
+        return ["copy", str(sources[0]), str(target)]
+    command = [executable("ffmpeg"), "-hide_banner", "-loglevel", "warning", "-y"]
+    for source in sources:
+        command.extend(["-i", str(source)])
+    command.extend(
+        [
+            "-filter_complex",
+            f"amix=inputs={len(sources)}:normalize=0:dropout_transition=0",
+            "-ar",
+            "44100",
+            "-ac",
+            "2",
+            "-c:a",
+            "pcm_s24le",
+            str(target),
+        ]
+    )
+    run_logged(command, log)
+    return command
+
+
+def subtract_audio(source: Path, subtract: Path, target: Path, log: LogCallback) -> list[str]:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    command = [
+        executable("ffmpeg"),
+        "-hide_banner",
+        "-loglevel",
+        "warning",
+        "-y",
+        "-i",
+        str(source),
+        "-i",
+        str(subtract),
+        "-filter_complex",
+        "[1:a]volume=-1[negative];[0:a][negative]amix=inputs=2:normalize=0:dropout_transition=0",
         "-ar",
         "44100",
         "-ac",

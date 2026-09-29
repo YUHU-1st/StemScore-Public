@@ -12,6 +12,7 @@ import webbrowser
 from . import __version__
 from .constants import APP_NAME, DEFAULT_PROJECTS_ROOT, STAGE_NAMES
 from .model_server import start_background as start_model_manager
+from .runtime_repair import RuntimeRepairer, is_repairable_runtime_error
 from .training.server import start_background
 from .workflow import ALL_DEREVERB_ROLES, DEFAULT_DEREVERB_ROLES, Workflow, find_project
 
@@ -42,6 +43,7 @@ class App(tk.Tk):
         self.dereverb_checks: list[ttk.Checkbutton] = []
         self._training_server = None
         self._model_server = None
+        self._repair_stage: int | None = None
         self._build()
 
     def _build(self) -> None:
@@ -116,6 +118,9 @@ class App(tk.Tk):
         self.approve_button = ttk.Button(left, text="审查通过，开始下一步", command=self._approve_and_next)
         self.approve_button.pack(fill="x", pady=4)
         ttk.Button(left, text="重试当前步骤", command=self._retry).pack(fill="x", pady=4)
+        self.repair_button = ttk.Button(left, text="一键修复运行环境", command=self._repair_runtime)
+        self.repair_button.pack(fill="x", pady=4)
+        self.repair_button.configure(state="disabled")
         self.analysis_button = ttk.Button(
             left,
             text="生成音乐分析 / Music 3 提示词",
@@ -185,6 +190,7 @@ class App(tk.Tk):
                 Path(root),
                 dereverb_roles=self._selected_dereverb_roles(),
             )
+            self._repair_stage = None
             self.current_stage.set(1)
             self._refresh()
             self._run_stage(1)
@@ -197,6 +203,7 @@ class App(tk.Tk):
             return
         try:
             self.workflow = Workflow.load(find_project(Path(path)))
+            self._repair_stage = None
             self._load_dereverb_selection()
             selected = next((stage.number for stage in self.workflow.manifest.stages if stage.status not in {"reviewed", "locked"}), 5)
             self.current_stage.set(selected)
@@ -221,16 +228,56 @@ class App(tk.Tk):
         threading.Thread(target=work, daemon=True).start()
 
     def _stage_done(self, number: int) -> None:
+        self._repair_stage = None
         self.status.set(f"第 {number} 步完成，等待人工审查。")
         self.bell()
         self._refresh()
         messagebox.showinfo(APP_NAME, f"第 {number} 步“{STAGE_NAMES[number]}”已完成。\n\n请试听并检查产物；确认无误后点击“审查通过，开始下一步”。")
 
     def _stage_failed(self, number: int, error: Exception) -> None:
-        self.status.set(f"第 {number} 步失败。")
+        repairable = is_repairable_runtime_error(error)
+        self._repair_stage = number if repairable else None
+        self.status.set(f"第 {number} 步失败，可一键修复运行环境。" if repairable else f"第 {number} 步失败。")
         self._append_log(f"错误：{error}")
         self._refresh()
-        messagebox.showerror(APP_NAME, str(error))
+        if repairable:
+            messagebox.showerror(APP_NAME, f"{error}\n\n可点击左侧“一键修复运行环境”，StemScore 将只从固定的合法公开源下载并校验缺失组件；修复完成后会自动重试当前步骤。")
+        else:
+            messagebox.showerror(APP_NAME, str(error))
+
+    def _repair_runtime(self) -> None:
+        if not self.workflow or self._repair_stage is None:
+            return
+        number = self._repair_stage
+        self.status.set("正在一键修复运行环境；首次安装需要下载约 1.4 GB 模型和 GPU 依赖…")
+        self.repair_button.configure(state="disabled")
+        self._append_log("开始一键修复。仅使用固定版本的官方公开源，并对下载资产执行 SHA-256 校验。")
+
+        def work() -> None:
+            try:
+                assert self.workflow is not None
+                RuntimeRepairer(self.workflow.runtime).repair(self._append_log)
+                self.after(0, lambda: self._repair_done(number))
+            except Exception as error:
+                self.after(0, lambda error=error: self._repair_failed(error))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _repair_done(self, number: int) -> None:
+        if not self.workflow:
+            return
+        self._repair_stage = None
+        self.status.set("运行环境修复完成，正在自动重试失败步骤…")
+        if self.workflow.manifest.stage(number).status == "failed":
+            self.workflow.retry(number)
+        self._refresh()
+        self._run_stage(number)
+
+    def _repair_failed(self, error: Exception) -> None:
+        self.status.set("运行环境一键修复失败；可查看日志后再次重试。")
+        self._append_log(f"一键修复失败：{error}")
+        self._refresh()
+        messagebox.showerror(APP_NAME, f"运行环境一键修复失败：\n\n{error}")
 
     def _run_selected(self) -> None:
         if self.workflow:
@@ -331,6 +378,7 @@ class App(tk.Tk):
             self.run_button.configure(state="disabled")
             self.approve_button.configure(state="disabled")
             self.analysis_button.configure(state="disabled")
+            self.repair_button.configure(state="disabled")
             for check in self.dereverb_checks:
                 check.configure(state="normal")
             return
@@ -342,6 +390,9 @@ class App(tk.Tk):
         stage = self.workflow.manifest.stage(number)
         self.run_button.configure(state="normal" if stage.status == "ready" else "disabled")
         self.approve_button.configure(state="normal" if stage.status == "review_required" else "disabled")
+        self.repair_button.configure(
+            state="normal" if self._repair_stage is not None and stage.number == self._repair_stage else "disabled"
+        )
         self.analysis_button.configure(
             state="normal" if self.workflow.manifest.stage(5).status == "reviewed" else "disabled"
         )

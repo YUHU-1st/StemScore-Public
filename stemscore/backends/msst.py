@@ -20,6 +20,8 @@ class MsstModel:
     checkpoint: str
     primary_stem: str
     extract_complement: bool = True
+    source_url: str | None = None
+    license: str | None = None
 
 
 VOCAL_MODEL = MsstModel(
@@ -56,11 +58,22 @@ DEREVERB_MODEL = MsstModel(
     extract_complement=False,
 )
 
+PUBLIC_MEGA53_MODEL = MsstModel(
+    name="MVSep Mega 53 Stems v1",
+    model_type="bs_roformer",
+    config="configs/mvsep_mega_model_bs_roformer_53_stems.yaml",
+    checkpoint="pretrain/mvsep_mega_model_bs_roformer_53_stems_v1.ckpt",
+    primary_stem="lead-vocal",
+    extract_complement=False,
+    source_url="https://github.com/ZFTurbo/Music-Source-Separation-Training/releases/tag/v1.0.21",
+    license="MIT",
+)
+
 
 def model_evidence(runtime: LocalRuntime, model: MsstModel) -> dict[str, str | int]:
     config = runtime.msst_root / model.config
     checkpoint = runtime.msst_root / model.checkpoint
-    return {
+    evidence: dict[str, str | int] = {
         "backend": "MSST",
         "name": model.name,
         "model_type": model.model_type,
@@ -70,6 +83,90 @@ def model_evidence(runtime: LocalRuntime, model: MsstModel) -> dict[str, str | i
         "checkpoint_sha256": sha256_file(checkpoint),
         "checkpoint_size": checkpoint.stat().st_size,
     }
+    if model.source_url:
+        evidence["source_url"] = model.source_url
+    if model.license:
+        evidence["license"] = model.license
+    return evidence
+
+
+def model_available(runtime: LocalRuntime, model: MsstModel) -> bool:
+    return (runtime.msst_root / model.config).is_file() and (runtime.msst_root / model.checkpoint).is_file()
+
+
+def _inference_command(
+    runtime: LocalRuntime,
+    model: MsstModel,
+    input_dir: Path,
+    raw_dir: Path,
+) -> list[str]:
+    config = runtime.msst_root / model.config
+    checkpoint = runtime.msst_root / model.checkpoint
+    common = [
+        "--model_type",
+        model.model_type,
+        "--config_path",
+        str(config),
+        "--start_check_point",
+        str(checkpoint),
+        "--input_folder",
+        str(input_dir),
+        "--store_dir",
+        str(raw_dir),
+        "--disable_detailed_pbar",
+    ]
+    if runtime.msst_cli.is_file():
+        command = [
+            str(runtime.msst_cli),
+            "inference",
+            *common,
+            "--filename_template",
+            "{file_name}_{instr}",
+        ]
+    elif runtime.msst_inference.is_file():
+        command = [str(runtime.msst_python), str(runtime.msst_inference), *common]
+    else:
+        raise RuntimeError(f"MSST 运行环境缺少推理入口：{runtime.msst_cli} / {runtime.msst_inference}")
+    if model.extract_complement:
+        command.append("--extract_instrumental")
+    return command
+
+
+def separate_all(
+    runtime: LocalRuntime,
+    source: Path,
+    output_dir: Path,
+    model: MsstModel,
+    log: Callable[[str], None],
+) -> tuple[dict[str, Path], list[str]]:
+    config = runtime.msst_root / model.config
+    checkpoint = runtime.msst_root / model.checkpoint
+    for path in (runtime.msst_python, config, checkpoint):
+        if not path.is_file():
+            raise RuntimeError(f"MSST 文件不存在：{path}")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="stemscore-msst-") as temporary:
+        temporary_path = Path(temporary)
+        input_dir = temporary_path / "input"
+        raw_dir = temporary_path / "output"
+        input_dir.mkdir()
+        raw_dir.mkdir()
+        staged = input_dir / "track.wav"
+        try:
+            os.link(source, staged)
+        except OSError:
+            shutil.copy2(source, staged)
+        command = _inference_command(runtime, model, input_dir, raw_dir)
+        run_logged(command, log)
+        outputs: dict[str, Path] = {}
+        for raw in raw_dir.rglob("track_*.wav"):
+            stem = raw.stem.removeprefix("track_")
+            target = output_dir / f"track_{stem}.wav"
+            shutil.copy2(raw, target)
+            outputs[stem] = target
+        if not outputs:
+            raise RuntimeError("MSST 未生成任何分轨文件。")
+        return outputs, command
 
 
 def separate(
@@ -82,7 +179,7 @@ def separate(
 ) -> tuple[list[Path], list[str]]:
     config = runtime.msst_root / model.config
     checkpoint = runtime.msst_root / model.checkpoint
-    for path in (runtime.msst_python, runtime.msst_inference, config, checkpoint):
+    for path in (runtime.msst_python, config, checkpoint):
         if not path.is_file():
             raise RuntimeError(f"MSST 文件不存在：{path}")
 
@@ -99,24 +196,8 @@ def separate(
         except OSError:
             shutil.copy2(source, staged)
 
-        command = [
-            str(runtime.msst_python),
-            str(runtime.msst_inference),
-            "--model_type",
-            model.model_type,
-            "--config_path",
-            str(config),
-            "--start_check_point",
-            str(checkpoint),
-            "--input_folder",
-            str(input_dir),
-            "--store_dir",
-            str(raw_dir),
-            "--disable_detailed_pbar",
-        ]
-        if model.extract_complement:
-            command.append("--extract_instrumental")
-        run_logged(command, log, output_encoding="gbk")
+        command = _inference_command(runtime, model, input_dir, raw_dir)
+        run_logged(command, log)
 
         copied: list[Path] = []
         for role, filename in output_names.items():
@@ -134,6 +215,9 @@ def separate(
                     raw_dir / f"track_{role.capitalize()}.wav",
                 ]
             raw = next((path for path in candidates if path.is_file()), None)
+            if raw is None:
+                candidate_names = {path.name for path in candidates}
+                raw = next((path for path in raw_dir.rglob("*.wav") if path.name in candidate_names), None)
             if raw is None:
                 existing = ", ".join(path.name for path in raw_dir.glob("*.wav")) or "无"
                 raise RuntimeError(f"MSST 未生成预期 {role} 轨，实际输出：{existing}")

@@ -94,27 +94,46 @@ function Resolve-ExternalRuntime {
     if ($provided.Count -eq 0) {
         return $null
     }
-    if ($provided.Count -ne 3) {
-        throw 'MsstRoot, UvrRoot, and TranscriptionRoot must be provided together.'
+    if ([string]::IsNullOrWhiteSpace($MsstRoot) -or [string]::IsNullOrWhiteSpace($TranscriptionRoot)) {
+        throw 'MsstRoot and TranscriptionRoot must be provided together. UvrRoot is optional in RC3.'
     }
 
     $roots = [ordered]@{
         msst = [System.IO.Path]::GetFullPath($MsstRoot)
-        uvr = [System.IO.Path]::GetFullPath($UvrRoot)
         transcription = [System.IO.Path]::GetFullPath($TranscriptionRoot)
     }
-    $required = @(
+    if (-not [string]::IsNullOrWhiteSpace($UvrRoot)) {
+        $roots.uvr = [System.IO.Path]::GetFullPath($UvrRoot)
+    }
+    $pythonCandidates = @(
         (Join-Path $roots.msst 'env\python.exe'),
+        (Join-Path $roots.msst 'env\Scripts\python.exe')
+    )
+    if (-not ($pythonCandidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf })) {
+        throw "External runtime is missing MSST Python: $($pythonCandidates -join ' or ')"
+    }
+    $runnerCandidates = @(
         (Join-Path $roots.msst 'inference.py'),
+        (Join-Path $roots.msst 'env\Scripts\msst.exe')
+    )
+    if (-not ($runnerCandidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf })) {
+        throw "External runtime is missing an MSST inference entrypoint: $($runnerCandidates -join ' or ')"
+    }
+    $publicModelReady =
+        (Test-Path -LiteralPath (Join-Path $roots.msst 'configs\mvsep_mega_model_bs_roformer_53_stems.yaml') -PathType Leaf) -and
+        (Test-Path -LiteralPath (Join-Path $roots.msst 'pretrain\mvsep_mega_model_bs_roformer_53_stems_v1.ckpt') -PathType Leaf)
+    $legacyModelReady = @(
         (Join-Path $roots.msst 'configs\BS-Roformer-Resurrection-Config.yaml'),
         (Join-Path $roots.msst 'configs\config_karaoke_frazer_becruily.yaml'),
         (Join-Path $roots.msst 'configs\BS-Rofo-SW-Fixed.yaml'),
-        (Join-Path $roots.msst 'configs\config_dereverb_echo_mbr_v2.yaml'),
         (Join-Path $roots.msst 'pretrain\BS-Roformer-Resurrection.ckpt'),
         (Join-Path $roots.msst 'pretrain\bs_roformer_karaoke_frazer_becruily.ckpt'),
-        (Join-Path $roots.msst 'pretrain\BS-Rofo-SW-Fixed.ckpt'),
-        (Join-Path $roots.msst 'pretrain\dereverb_echo_mbr_fused_0.5_v2_0.25_big_0.25_super.ckpt'),
-        (Join-Path $roots.uvr 'models\Demucs_Models\v3_v4_repo'),
+        (Join-Path $roots.msst 'pretrain\BS-Rofo-SW-Fixed.ckpt')
+    ) | Where-Object { -not (Test-Path -LiteralPath $_ -PathType Leaf) }
+    if (-not $publicModelReady -and $legacyModelReady.Count -gt 0) {
+        throw 'External runtime has neither the public MVSep Mega 53-stem model nor the complete legacy separation model set.'
+    }
+    $required = @(
         (Join-Path $roots.transcription '.venv\Scripts\python.exe'),
         (Join-Path $roots.transcription '.venv\Lib\site-packages\basic_pitch\saved_models\icassp_2022\nmp.onnx'),
         (Join-Path (Split-Path -Parent $roots.transcription) 'transkun-packages\transkun\pretrained\2.0.pt'),
@@ -163,6 +182,7 @@ $runtimePartFiles = @($runtimePartAssets | ForEach-Object { Assert-ReleaseAsset 
 $runtimeIncluded = [bool]$profilePayload.runtimeIncluded
 $externalRuntime = Resolve-ExternalRuntime
 $externalRuntimeReady = $null -ne $externalRuntime
+$repairablePublicRuntime = [bool]$releaseManifest.publicSafe -and -not $runtimeIncluded -and -not $externalRuntimeReady
 if ($runtimeIncluded -and $runtimePartFiles.Count -ne [int]$profilePayload.partCount) {
     throw "Runtime payload part count mismatch for $($selection.ProfileId)."
 }
@@ -179,7 +199,8 @@ $plan = [pscustomobject]@{
     RuntimePayloadIncluded = $runtimeIncluded
     CoreModelWeightsIncluded = [bool]$profilePayload.coreModelWeightsIncluded
     OptionalAnalysisModelsIncluded = [bool]$profilePayload.optionalAnalysisModelsIncluded
-    LaunchReady = [bool]($profilePayload.launchReady -or $externalRuntimeReady)
+    LaunchReady = [bool]($profilePayload.launchReady -or $externalRuntimeReady -or $repairablePublicRuntime)
+    RuntimeRepairRequired = $repairablePublicRuntime
     ExpectedRuntimeDirectory = Join-Path $destinationRoot $selection.RuntimeDirectory
     ModelsDirectory = Join-Path $destinationRoot 'models'
     ExternalRuntimeRoots = $externalRuntime
@@ -190,8 +211,8 @@ if ($PlanOnly) {
     return
 }
 
-if (-not $runtimeIncluded -and -not $externalRuntimeReady) {
-    throw "No runnable runtime is available for profile $($selection.ProfileId). This public package does not include the MSST/UVR runtime or core separation weights. Provide -MsstRoot, -UvrRoot, and -TranscriptionRoot together, or use a private/offline package that includes a verified runtime payload."
+if ($repairablePublicRuntime) {
+    Write-Warning "The public package is being installed without a prebuilt separation runtime. StemScore will offer one-click repair on the first runtime-related failure and download only pinned, permissively licensed public components."
 }
 
 if (Test-Path -LiteralPath $destinationRoot) {
@@ -252,7 +273,8 @@ try {
         coreModelWeightsIncluded = [bool]$profilePayload.coreModelWeightsIncluded
         optionalAnalysisModelsIncluded = [bool]$profilePayload.optionalAnalysisModelsIncluded
         modelsDirectoryWritable = $true
-        launchReady = [bool]($profilePayload.launchReady -or $externalRuntimeReady)
+        launchReady = [bool]($profilePayload.launchReady -or $externalRuntimeReady -or $repairablePublicRuntime)
+        runtimeRepairRequired = $repairablePublicRuntime
         expectedRuntimeDirectory = $selection.RuntimeDirectory
         externalRuntimeRoots = $externalRuntime
     }

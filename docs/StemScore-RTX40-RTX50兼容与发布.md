@@ -1,12 +1,12 @@
 # StemScore RTX 40 / RTX 50 兼容与公开发布
 
-StemScore 使用一份共享应用内核，为 RTX 40 与 RTX 50 维护相互隔离的运行时 profile。PyTorch、CUDA 用户态 DLL 与自定义扩展不得在同一进程中混装。公开 Release 只发布应用核心、显卡选择器、部署器和 profile 元数据，不发布 Python/CUDA runtime 或模型权重。
+StemScore 使用一份共享应用内核，为 RTX 40 与 RTX 50 维护相互隔离的运行时 profile。PyTorch、CUDA 用户态 DLL 与自定义扩展不得在同一进程中混装。公开 Release 只发布应用核心、显卡选择器、部署器和 profile 元数据，不把 Python/CUDA runtime 或模型权重预装进应用 ZIP。RC3 可在用户点击“一键修复运行环境”后，从固定官方源下载许可明确的运行时与 MVSep Mega 53-stem v1，并在本机校验 SHA-256。
 
 ## 固定配置
 
 | Profile | GPU / Compute Capability | PyTorch 组合 | CUDA wheel | Windows 驱动门槛 |
 | --- | --- | --- | --- | --- |
-| `rtx40-cu126` | RTX 40 / `8.9`；wheel 含 `sm_86` | torch 2.12.1 / torchvision 0.27.1 / torchaudio 2.11.0 | `cu126` | 建议 560.76 或更高；低于此值警告 |
+| `rtx40-cu126` | RTX 40 / `8.9`；wheel 含 `sm_86` | torch 2.11.0 / torchvision 0.26.0 / torchaudio 2.11.0 | `cu126` | 建议 560.76 或更高；低于此值警告 |
 | `rtx50-cu128` | RTX 50 / `12.0` (`sm_120`) | torch 2.8.0 / torchvision 0.23.0 / torchaudio 2.8.0 | `cu128` | 必须 572.30 或更高 |
 
 机器可读配置位于 `packaging/runtime-profiles.json`。`cu126`/`cu128` 表示 PyTorch wheel 自带的 CUDA 用户态运行库；使用官方 wheel 不要求安装完整 CUDA Toolkit，但需要兼容的 NVIDIA 驱动。RTX 40 的官方 cu126 wheel 含 `sm_86` 而不含 `sm_89`；NVIDIA 同主版本二进制兼容规则允许面向 8.6 生成的 cubin 在 8.9 设备上运行，因此选择器验证 `sm_86`，不虚构 `sm_89` wheel。
@@ -39,9 +39,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\packaging\Select-StemScore
 先构建冻结客户端，再启用公开安全模式：
 
 ```powershell
-.\build_stemscore.ps1 -Version 1.0.0-public-rc2
+.\build_stemscore.ps1 -Version 1.0.0-public-rc3
 powershell -NoProfile -ExecutionPolicy Bypass -File .\packaging\Build-StemScoreGpuRelease.ps1 `
-  -Version 1.0.0-public-rc2 -PublicSafe
+  -Version 1.0.0-public-rc3 -PublicSafe
 ```
 
 `-PublicSafe` 拒绝 `-RuntimePayloadRoot`，并扫描应用目录中的 `.ckpt`、`.pt`、`.pth`、`.th`、`.onnx`、`.safetensors` 和 `.gguf`。发布清单必须同时满足：
@@ -53,18 +53,15 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\packaging\Build-StemScoreG
 
 公开资产包含共享 core ZIP、两个 profile ZIP、部署器、选择器、机器可读清单、校验文件、安装说明、转写环境安装脚本和第三方声明。所有资产都低于 GitHub 单文件上限并记录 SHA-256。
 
-## 部署并绑定现有环境
+## 部署与运行时修复
 
-公开包不会自行取得许可不明的分离模型。用户必须提供自己有权使用的本地目录：
+RC3 可以在没有现成 MSST/UVR 目录的机器上先部署客户端：
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\Deploy-StemScoreGpuPackage.ps1 `
-  -Destination "$env:LOCALAPPDATA\StemScore" `
-  -MsstRoot "C:\你的MSST目录" `
-  -UvrRoot "C:\你的UVR目录" `
-  -TranscriptionRoot "$env:LOCALAPPDATA\StemScore\transcription\basic-pitch"
+  -Destination "$env:LOCALAPPDATA\StemScore"
 ```
 
-部署器先验证 Release 资产，再检查三处外部目录中的必需入口、配置和权重。只有全部通过才在 `deployment-state.json` 写入 `launchReady=true`；外部绝对路径只保存在用户本机。
+部署器先验证 Release 资产并选择 GPU profile。若没有预装/外部 runtime，会写入 `runtimeRepairRequired=true` 并允许客户端启动；第一次遇到运行时缺失时，客户端提供一键修复。已有合法旧 runtime 的用户可用 `-MsstRoot` 与 `-TranscriptionRoot` 绑定；`-UvrRoot` 仅保留兼容性，不再是硬依赖。
 
 权重许可和公开/私有边界见 `docs/StemScore-模型许可清单.md`。

@@ -5,7 +5,7 @@ This file documents third-party components only. It does not grant a license for
 - Mido, MIT License, <https://github.com/mido/mido>
 - Basic Pitch, Apache-2.0, <https://github.com/spotify/basic-pitch>
 - TransKun, MIT License, <https://github.com/Yujia-Yan/Transkun>
-- Music Source Separation Training code, MIT License, <https://github.com/ZFTurbo/Music-Source-Separation-Training>. This code license does not grant redistribution rights for third-party checkpoints loaded by StemScore.
+- Music Source Separation Training (`msst==0.1.0`), MIT License, <https://github.com/ZFTurbo/Music-Source-Separation-Training>.
 - Demucs code, MIT License, <https://github.com/facebookresearch/demucs>. The pretrained weights are outside that MIT grant; the upstream maintainer describes them as research-only.
 - librosa, ISC License, <https://github.com/librosa/librosa>
 - NumPy, BSD-3-Clause License, <https://github.com/numpy/numpy>
@@ -19,6 +19,14 @@ This file documents third-party components only. It does not grant a license for
 - llama.cpp b10887 Windows x64 CPU runner, MIT License, pinned archive and SHA-256 in `stemscore/model_catalog.json`, <https://github.com/ggml-org/llama.cpp/releases/tag/b10887>
 
 These optional files are not part of the application source archive. StemScore downloads them into the software installation's writable `models` directory after the user chooses a model. The catalog records each upstream URL, revision or release, size, SHA-256 and license link.
+
+# Public one-click repair separation model
+
+- MVSep Mega 53 Stems v1, released by ZFTurbo with MIT permission for the checkpoint in the upstream project discussion and distributed from the official `v1.0.21` GitHub Release.
+- Config SHA-256: `7e198062a251587088adb91215a4f44ab59e67bd62fcc805cf54d6e7dfc51103`.
+- Checkpoint SHA-256: `c62820893bbf86d4e734f966bd142d9157cfc8bb8e79e9d8f9ea553f3ff3519f`.
+- StemScore does not bundle this 1.37 GB checkpoint in the public application ZIP. The RC3 one-click repair downloads it directly from the official GitHub Release and verifies the pinned size and SHA-256 before use.
+- The upstream author also states that he does not hold copyright to all audio used to train the model and provides no legal guarantee or indemnification for training-data claims. Users remain responsible for assessing that risk for their intended use.
 
 # BS-RoFormer SW Fixed six-stem checkpoint
 

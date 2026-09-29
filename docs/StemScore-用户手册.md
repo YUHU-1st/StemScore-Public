@@ -1,13 +1,13 @@
 # StemScore AI 扒谱用户手册
 
-StemScore 是完全本地运行的 Windows 客户端。音频、模型输入、分轨和 MIDI 不上传到网络。客户端复用本机 MSST-GUI 与 UVR 模型，并为每一步保存命令、模型 SHA-256、输入输出 SHA-256、音频参数和日志。
+StemScore 是本地运行的 Windows 客户端。音频、模型输入、分轨和 MIDI 不上传到网络；只有用户主动下载运行时/模型时访问对应官方源。客户端为每一步保存命令、模型 SHA-256、输入输出 SHA-256、音频参数和日志。
 
 ## 首次安装
 
-1. 准备自己有权使用的 MSST-GUI、UVR 与核心分离模型；公开包不包含也不自动下载这些权重。
-2. 运行 `powershell -ExecutionPolicy Bypass -File .\tools\setup_stemscore_runtime.ps1 -MsstRoot "C:\你的MSST目录"`，在 `%LOCALAPPDATA%\StemScore\transcription` 安装许可明确的 Basic Pitch 与 TransKun。脚本不会修改或下载 MSST/UVR 权重。
-3. 使用 `Deploy-StemScoreGpuPackage.ps1` 的 `-MsstRoot`、`-UvrRoot` 和 `-TranscriptionRoot` 参数一次绑定三个本地目录，详见 `StemScore-Public-Install.md`。
-4. 源码运行：`.\.venv312\Scripts\python.exe -m stemscore.app`。部署包运行：`%LOCALAPPDATA%\StemScore\app\StemScore.exe`。
+1. 使用 `Deploy-StemScoreGpuPackage.ps1` 部署公开包，或直接解压 core ZIP 运行 `StemScore.exe`。
+2. 新建项目并正常运行。若 AI 运行时缺失，左侧“一键修复运行环境”会自动变为可用。
+3. 点击一次后，程序自动检测 RTX 40/50、安装匹配的 PyTorch CUDA runtime、MSST、MVSep Mega 53-stem v1、Basic Pitch 与 TransKun；固定下载资产会校验 SHA-256，完成后自动重试失败步骤。
+4. 已有合法旧版 MSST/UVR 模型的用户仍可通过部署器绑定旧环境；不会强制替换。
 
 ## 五步操作
 
@@ -19,13 +19,13 @@ StemScore 是完全本地运行的 Windows 客户端。音频、模型输入、�
 
 ### 2. 人声 / 伴奏
 
-MSST 使用本机 `BS-Roformer-Resurrection.ckpt` 预测人声，并从混音中计算伴奏。输出位于 `02_vocal_accompaniment`。
+若用户绑定了完整旧私有环境，StemScore 继续使用原 BS-RoFormer 人声模型；否则 RC3 使用一键修复安装的 MIT MVSep Mega 53-stem v1，将 lead-vocal、back-vocal、vocal 合成人声，并由原混音计算伴奏。输出位于 `02_vocal_accompaniment`。
 
 重点检查主唱是否缺字、鼓和镲是否串入人声、伴奏是否残留明显人声。任何一步不满意，都保留当前文件后点“重试当前步骤”；不要先通过审查。
 
 ### 3. 主唱 / 和声 / 乐器分轨
 
-人声轨由本机 Karaoke RoFormer 分成主唱和和声/叠唱；伴奏轨由 BS-RoFormer SW Fixed 六分轨模型分成 bass、drums、guitar、piano、other。输出位于 `03_stems`。旧 `htdemucs_6s` 仍保留作兼容后端，但不再作为默认 guitar/piano 模型。
+旧私有环境继续使用 Karaoke RoFormer + BS-RoFormer SW Fixed。公开 RC3 则复用第 2 步已经一次生成的 53-stem 缓存：lead-vocal/vocal 聚合为主唱，back-vocal 为和声，低音、鼓、吉他与键盘按 53-stem 标签聚合，其余伴奏残差归入 other，不会为第 3 步再次加载大模型。输出位于 `03_stems`。
 
 逐轨试听。模型分类是概率判断，合成器、失真吉他和复合打击乐可能落入 `other`，这不是文件丢失；第 2 步原始伴奏仍保留。
 
@@ -33,7 +33,7 @@ MSST 使用本机 `BS-Roformer-Resurrection.ckpt` 预测人声，并从混音中
 
 客户端左侧“第 4 步去混响角色”可逐项选择主唱、和声和各类乐器。默认只勾选主唱：和声及所有乐器直接复制第 3 步原分轨到 `04_dereverb`，供后续 MIDI 使用，不调用去混响模型；元数据记录 `bypassed_by_role_policy`。选择必须在第 4 步开始前完成，运行后会锁定以保证复现。
 
-已勾选轨道会送入本机 MelBand-RoFormer。候选平均电平损失超过 6 dB、受保护角色在 6 kHz 以上相对能量损失超过 4 dB，或峰均比下降超过 3 dB 时，程序恢复原分轨；低于 −65 dB 的近静音轨直接跳过。响度用于发现主体被删，高频平衡用于发现发闷，峰均比用于发现鼓点、拨弦和辅音瞬态被磨平。自动门只能判定候选是否明显受损，不能证明艺术听感更好；用户仍应 A/B 检查齿音、尾音、镲片、和声层次和空间类合成器。
+已勾选轨道在用户本机存在许可兼容的 MelBand-RoFormer 时才执行去混响。公开 RC3 不会自动下载 CC BY-NC-SA 或许可不明的去混响权重；缺少许可兼容模型时保留原分轨并记录 `bypassed_no_permissive_dereverb_model`。若实际执行去混响，候选平均电平损失超过 6 dB、受保护角色在 6 kHz 以上相对能量损失超过 4 dB，或峰均比下降超过 3 dB 时，程序恢复原分轨；低于 −65 dB 的近静音轨直接跳过。
 
 对 MIDI 而言，优先条件是分轨中目标乐器清晰、串音少、音高与起点完整；残留少量自然混响通常比被去混响模型削掉泛音和瞬态更安全。因此除非试听确认有必要，不建议为和声、鼓、钢琴、吉他、贝斯和 other 开启去混响。
 
@@ -76,6 +76,6 @@ MSST 使用本机 `BS-Roformer-Resurrection.ckpt` 预测人声，并从混音中
 - `failed`：查看 `logs/stage-N.log`，修复后点“重试当前步骤”。
 - 文件被手工改动：审查按钮会检测 SHA-256 变化并拒绝继续。若改动是有意的，请新建项目或在代码层重新登记产物，不要绕过清单。
 - CUDA 显存不足：关闭其他 GPU 程序后重试。本机默认六分轨模型已在 16GB 显存完成整曲验证。
-- Basic Pitch 或 TransKun 未安装：重新运行 `tools/setup_stemscore_runtime.ps1`。核心分离权重缺失时，请从你有权使用的本地 MSST/UVR 环境导入；公开版不会替用户下载许可不明的权重。
+- MSST、公开分离模型、Basic Pitch 或 TransKun 缺失：错误出现后点击“一键修复运行环境”；成功后程序自动重试。旧的许可不明分离权重不会被自动下载。
 - 自动续跑任务不会替你点击审查通过；等待人工审查时会保持安静。
 

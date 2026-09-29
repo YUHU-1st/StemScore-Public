@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import shutil
 import wave
 
 import mido
@@ -10,7 +11,7 @@ import pytest
 from stemscore.manifest import Artifact, ProjectManifest
 from stemscore.midi_tools import merge_midi_files, normalize_single_track, write_drum_midi, write_empty_midi
 from stemscore.training.catalog import build_catalog
-from stemscore.workflow import Workflow, dereverb_quality_status, safe_name
+from stemscore.workflow import PUBLIC_MEGA53_GROUPS, Workflow, dereverb_quality_status, safe_name
 
 
 def write_wav(path: Path, frames: int = 4410) -> None:
@@ -84,6 +85,82 @@ def test_stage4_bypasses_unselected_role_without_model(tmp_path: Path) -> None:
     assert output.sha256 == Artifact.from_file(source, "piano", "audio/wav").sha256
     assert stage.commands == []
     assert stage.models == []
+
+
+def test_stage4_preserves_selected_role_when_permissive_dereverb_is_unavailable(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "lead.wav"
+    write_audible_wav(source)
+    workflow = Workflow.create(source, tmp_path / "projects", "no-dereverb")
+    for number in (1, 2, 3):
+        workflow.manifest.stage(number).status = "reviewed"
+    workflow.manifest.stage(3).artifacts = [Artifact.from_file(source, "lead_vocal", "audio/wav")]
+    workflow.manifest.stage(4).status = "ready"
+    workflow.manifest.save()
+
+    workflow.run_stage(4)
+
+    stage = workflow.manifest.stage(4)
+    output = next(artifact for artifact in stage.artifacts if artifact.role == "lead_vocal_dry")
+    assert output.metadata["quality_status"] == "bypassed_no_permissive_dereverb_model"
+    assert output.sha256 == Artifact.from_file(source, "lead_vocal", "audio/wav").sha256
+    assert stage.commands == []
+    assert stage.models == []
+
+
+def test_public_mega53_groups_keep_vocals_and_instrument_roles_disjoint() -> None:
+    flattened = [stem for stems in PUBLIC_MEGA53_GROUPS.values() for stem in stems]
+    assert len(flattened) == len(set(flattened))
+    assert PUBLIC_MEGA53_GROUPS["lead_vocal"] == ("lead-vocal", "vocal")
+    assert PUBLIC_MEGA53_GROUPS["harmony_vocal"] == ("back-vocal",)
+    assert {"bass", "drums", "guitar", "piano"} <= PUBLIC_MEGA53_GROUPS.keys()
+
+
+def test_public_mega53_fallback_runs_model_once_and_reuses_raw_stems(
+    tmp_path: Path, monkeypatch
+) -> None:
+    source = tmp_path / "song.wav"
+    write_audible_wav(source, frames=2205)
+    workflow = Workflow.create(source, tmp_path / "projects", "public-fallback")
+    workflow.manifest.stage(1).status = "reviewed"
+    workflow.manifest.stage(1).artifacts = [Artifact.from_file(source, "source", "audio/wav")]
+    workflow.manifest.stage(2).status = "ready"
+    workflow.manifest.save()
+    monkeypatch.setattr("stemscore.inventory.LocalRuntime.validate_core", lambda _runtime: None)
+    monkeypatch.setattr("stemscore.workflow.msst.model_available", lambda _runtime, _model: False)
+    monkeypatch.setattr(
+        "stemscore.workflow.msst.model_evidence",
+        lambda _runtime, model: {"name": model.name, "backend": "MSST"},
+    )
+    calls: list[Path] = []
+
+    def fake_separate_all(_runtime, input_path, output_dir, _model, _log):
+        calls.append(input_path)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        stems = {"lead-vocal", "back-vocal", "vocal", "saxophone"}
+        stems.update(stem for group in PUBLIC_MEGA53_GROUPS.values() for stem in group)
+        result = {}
+        for stem in stems:
+            path = output_dir / f"track_{stem}.wav"
+            shutil.copy2(source, path)
+            result[stem] = path
+        return result, ["msst", "inference"]
+
+    monkeypatch.setattr("stemscore.workflow.msst.separate_all", fake_separate_all)
+
+    workflow.run_stage(2)
+    workflow.approve(2)
+    workflow.run_stage(3)
+
+    assert len(calls) == 1
+    assert workflow.manifest.settings["separation_backend"] == "public-mega53-v1"
+    roles = {
+        artifact.role
+        for artifact in workflow.manifest.stage(3).artifacts
+        if artifact.media_type == "audio/wav"
+    }
+    assert roles == {"lead_vocal", "harmony_vocal", "bass", "drums", "guitar", "piano", "other"}
 
 
 def test_manifest_roundtrip_and_hash_verification(tmp_path: Path) -> None:

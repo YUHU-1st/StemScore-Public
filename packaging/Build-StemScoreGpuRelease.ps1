@@ -191,6 +191,7 @@ if ($PlanOnly) {
         CoreModelWeightsIncluded = [bool]($runtimeProfiles | Where-Object CoreModelWeightsIncluded)
         OptionalAnalysisModelsIncluded = $false
         LaunchReady = [bool]($runtimeProfiles | Where-Object RuntimePayloadIncluded)
+        RuntimeRepairAvailable = [bool]$PublicSafe
         PublicSafe = [bool]$PublicSafe
         DeploymentEntrypoint = 'Deploy-StemScoreGpuPackage.ps1'
         PlannedAssets = $plannedAssets
@@ -287,10 +288,11 @@ try {
             coreModelWeightsIncluded = $runtimeIncluded
             optionalAnalysisModelsIncluded = $false
             launchReady = $runtimeIncluded
+            runtimeRepairAvailable = [bool]$PublicSafe
         }
         $profileDocument | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $profileStage 'runtime-profile.json') -Encoding utf8
 
-        $payloadDescription = if ($runtimeIncluded) { 'A matching offline runtime payload is included as release parts.' } elseif ($PublicSafe) { 'This public package contains no runtime or model weights. Bind an existing licensed local runtime during deployment.' } else { 'This is a lightweight runtime profile. It does not include a runtime payload.' }
+        $payloadDescription = if ($runtimeIncluded) { 'A matching offline runtime payload is included as release parts.' } elseif ($PublicSafe) { 'This public package contains no prebuilt runtime or model weights. Install the client first; StemScore offers one-click repair from pinned permissively licensed public sources when a runtime is needed.' } else { 'This is a lightweight runtime profile. It does not include a runtime payload.' }
         $readme = @"
 StemScore $Version - $($profile.displayName)
 
@@ -301,7 +303,7 @@ Required shared application package: $coreAssetName
 Expected runtime directory: $($profile.runtimeDirectory)
 Run Select-StemScoreRuntime.ps1 to verify the GPU, driver, and selected profile.
 Deploy-StemScoreGpuPackage.ps1 verifies all release parts and installs the matching runtime when present.
-For a public package, pass -MsstRoot, -UvrRoot, and -TranscriptionRoot together to bind your existing local runtime.
+For a public package, an existing runtime is optional. The deployed app can repair the missing runtime in-app; legacy users may pass -MsstRoot and -TranscriptionRoot, with -UvrRoot optional for compatibility.
 See the RTX 40 / RTX 50 deployment document under docs for the full procedure.
 "@
         $readme | Set-Content -LiteralPath (Join-Path $profileStage 'README.txt') -Encoding utf8
@@ -321,6 +323,7 @@ See the RTX 40 / RTX 50 deployment document under docs for the full procedure.
             coreModelWeightsIncluded = $runtimeIncluded
             optionalAnalysisModelsIncluded = $false
             launchReady = $runtimeIncluded
+            runtimeRepairAvailable = [bool]$PublicSafe
             archiveSizeBytes = 0
             archiveSha256 = $null
             partCount = 0
@@ -360,6 +363,7 @@ See the RTX 40 / RTX 50 deployment document under docs for the full procedure.
         version = $Version
         createdUtc = [DateTime]::UtcNow.ToString('o')
         publicSafe = [bool]$PublicSafe
+        runtimeRepairAvailable = [bool]$PublicSafe
         runtimePayloadsIncluded = [bool]($profilePayloads | Where-Object runtimeIncluded)
         coreModelWeightsIncluded = [bool]($profilePayloads | Where-Object coreModelWeightsIncluded)
         optionalAnalysisModelsIncluded = $false
@@ -370,6 +374,7 @@ See the RTX 40 / RTX 50 deployment document under docs for the full procedure.
             coreModelWeightsIncluded = [bool]($profilePayloads | Where-Object coreModelWeightsIncluded)
             optionalAnalysisModelsIncluded = $false
             launchReady = [bool]($profilePayloads | Where-Object launchReady)
+            runtimeRepairAvailable = [bool]$PublicSafe
         }
         profiles = $profilePayloads
         githubAssetLimitBytes = $assetLimit
