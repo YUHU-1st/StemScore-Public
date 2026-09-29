@@ -46,6 +46,14 @@ jobs:
           .\.venv312\Scripts\python.exe -m pip install --upgrade pip
           .\.venv312\Scripts\python.exe -m pip install -r requirements.txt pytest pyinstaller
 
+      - name: Install FFmpeg for integration tests
+        if: steps.meta.outputs.exists != 'true'
+        shell: pwsh
+        run: |
+          choco install ffmpeg -y --no-progress
+          ffmpeg -version
+          ffprobe -version
+
       - name: Run tests
         if: steps.meta.outputs.exists != 'true'
         shell: pwsh
