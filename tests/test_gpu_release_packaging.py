@@ -283,6 +283,7 @@ def test_transcription_setup_does_not_require_msst_before_basic_pitch() -> None:
     script = (repository / "tools" / "setup_stemscore_runtime.ps1").read_text(encoding="utf-8")
     assert "[Parameter(Mandatory)]" not in script
     assert "Basic Pitch is ready; TransKun was skipped" in script
+    assert "Invoke-NativeChecked" in script
 
 
 def test_public_safe_release_rejects_model_weights_and_runtime_payload(tmp_path: Path) -> None:
