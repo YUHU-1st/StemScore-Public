@@ -5,6 +5,26 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+function Invoke-NativeChecked {
+    param(
+        [Parameter(Mandatory)][string]$FilePath,
+        [Parameter(Mandatory)][string[]]$Arguments,
+        [Parameter(Mandatory)][string]$FailureMessage
+    )
+
+    $previousPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        & $FilePath @Arguments 2>&1 | ForEach-Object { Write-Host $_ }
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousPreference
+    }
+    if ($exitCode -ne 0) {
+        throw "$FailureMessage (exit code $exitCode)"
+    }
+}
+
 $uv = (Get-Command uv -ErrorAction Stop).Source
 $environment = Join-Path $RuntimeRoot '.venv'
 $python = Join-Path $environment 'Scripts\python.exe'
@@ -14,18 +34,17 @@ $transkunPackages = Join-Path (Split-Path -Parent $RuntimeRoot) 'transkun-packag
 
 New-Item -ItemType Directory -Path $RuntimeRoot -Force | Out-Null
 if (-not (Test-Path -LiteralPath $python)) {
-    & $uv venv --python 3.11 $environment
+    Invoke-NativeChecked $uv @('venv', '--python', '3.11', $environment) 'Failed to create the Basic Pitch virtual environment.'
 }
 
-& $uv pip install --python $python 'basic-pitch==0.4.0' 'onnxruntime==1.23.2' 'setuptools==80.9.0'
-& $python -c "from basic_pitch.inference import predict; print('Basic Pitch import OK')"
-if ($LASTEXITCODE -ne 0) {
-    throw 'Basic Pitch import validation failed.'
-}
-& $basicPitch --help
-if ($LASTEXITCODE -ne 0) {
-    throw 'Basic Pitch CLI validation failed.'
-}
+Invoke-NativeChecked $uv @(
+    'pip', 'install', '--python', $python,
+    'basic-pitch==0.4.0', 'onnxruntime==1.23.2', 'setuptools==80.9.0'
+) 'Basic Pitch dependency installation failed.'
+Invoke-NativeChecked $python @(
+    '-c', "from basic_pitch.inference import predict; print('Basic Pitch import OK')"
+) 'Basic Pitch import validation failed.'
+Invoke-NativeChecked $basicPitch @('--help') 'Basic Pitch CLI validation failed.'
 if (-not (Test-Path -LiteralPath $basicPitchModel)) {
     throw 'Basic Pitch ONNX model validation failed.'
 }
@@ -39,19 +58,30 @@ if ([string]::IsNullOrWhiteSpace($MsstRoot)) {
         Write-Warning "MSST Python not found: $msstPython. Basic Pitch is ready; TransKun was skipped."
     } else {
         New-Item -ItemType Directory -Path $transkunPackages -Force | Out-Null
-        & $uv pip install --python $msstPython --target $transkunPackages --link-mode copy --no-deps `
-            'transkun==2.0.1' 'moduleconf==0.1.4' 'pretty-midi==0.2.11.post0' 'pydub==0.25.1' `
-            'soxr==1.0.0' 'sox==1.5.0' 'mido==1.3.3' 'importlib-resources==6.5.2'
+        Invoke-NativeChecked $uv @(
+            'pip', 'install', '--python', $msstPython, '--target', $transkunPackages,
+            '--link-mode', 'copy', '--no-deps',
+            'transkun==2.0.1', 'moduleconf==0.1.4', 'pretty-midi==0.2.11.post0',
+            'pydub==0.25.1', 'soxr==1.0.0', 'sox==1.5.0', 'mido==1.3.3',
+            'importlib-resources==6.5.2'
+        ) 'TransKun dependency installation failed.'
         $env:PYTHONPATH = $transkunPackages
-        & $msstPython -m transkun.transcribe -h | Out-Null
-        if ($LASTEXITCODE -ne 0) {
-            throw 'TransKun V2 import validation failed.'
-        }
+        Invoke-NativeChecked $msstPython @('-m', 'transkun.transcribe', '-h') 'TransKun V2 import validation failed.'
         $transkunReady = $true
     }
 }
 
-$lock = & $uv pip freeze --python $python
+$previousPreference = $ErrorActionPreference
+try {
+    $ErrorActionPreference = 'Continue'
+    $lock = & $uv pip freeze --python $python 2>$null
+    $freezeExitCode = $LASTEXITCODE
+} finally {
+    $ErrorActionPreference = $previousPreference
+}
+if ($freezeExitCode -ne 0) {
+    throw "Failed to freeze Basic Pitch runtime dependencies. (exit code $freezeExitCode)"
+}
 $lockPath = Join-Path $RuntimeRoot 'requirements.lock.txt'
 $lock | Set-Content -LiteralPath $lockPath -Encoding utf8
 Get-FileHash -Algorithm SHA256 $lockPath
@@ -67,4 +97,3 @@ if ($transkunReady) {
     Write-Host 'TransKun is not installed yet. Re-run this script with -MsstRoot after preparing a licensed MSST runtime.'
 }
 Write-Host 'No MSST or UVR separation checkpoint was downloaded. Supply models you are licensed to use, then bind the three runtime roots with Deploy-StemScoreGpuPackage.ps1.'
-
