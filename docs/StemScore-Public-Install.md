@@ -20,9 +20,14 @@ StemScore 公开版包含同一套五步客户端、RTX 40/50 运行时选择逻
 
 用户必须自行准备并确认有权使用的 MSST-GUI、UVR 和分离模型。公开版不会自动下载下列受限权重：BS-RoFormer Resurrection、Karaoke Frazer/Becruily、BS-RoFormer SW Fixed、Dereverb/Echo Fused 和 Demucs `htdemucs_6s`。所需文件名与许可边界见 `docs/StemScore-模型许可清单.md`。
 
-Basic Pitch 与 TransKun 可通过公开包内的 `setup_runtime.ps1` 安装到本机；该脚本不下载 MSST/UVR 权重：
+Basic Pitch 可通过公开包内的 `setup_runtime.ps1` 在没有 MSST 的新机器上先行安装。TransKun 需要带 PyTorch/CUDA 的 Python；提供 `-MsstRoot` 时脚本会继续把 TransKun 安装到 StemScore 的独立转写目录。该脚本不下载 MSST/UVR 权重：
 
 ```powershell
+# 纯新机：先安装 Basic Pitch；TransKun 会明确提示暂时跳过
+powershell -NoProfile -ExecutionPolicy Bypass -File .\setup_runtime.ps1 `
+  -RuntimeRoot "$env:LOCALAPPDATA\StemScore\transcription\basic-pitch"
+
+# 已准备合法 MSST 运行时后，再补齐 TransKun
 powershell -NoProfile -ExecutionPolicy Bypass -File .\setup_runtime.ps1 `
   -MsstRoot "C:\你的MSST目录" `
   -RuntimeRoot "$env:LOCALAPPDATA\StemScore\transcription\basic-pitch"
@@ -40,7 +45,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\Deploy-StemScoreGpuPackage
   -TranscriptionRoot "$env:LOCALAPPDATA\StemScore\transcription\basic-pitch"
 ```
 
-部署器会自动读取 NVIDIA 型号、Compute Capability 与驱动版本，选择 RTX 40 `cu126` 或 RTX 50 `cu128` profile，并检查应用包与本地运行目录。三个路径必须同时提供；必需文件缺失时部署会停止并列出缺失路径，不会把不完整安装标记为可运行。
+部署器会自动读取 NVIDIA 型号、Compute Capability 与驱动版本，选择 RTX 40 `cu126` 或 RTX 50 `cu128` profile，并检查应用包与本地运行目录。三个路径必须同时提供；必需文件缺失时部署会停止并列出缺失路径。公开包没有内置运行时且未传入三个本地运行时路径时，部署器现在会直接报错并停止，不再留下一个 `launchReady=false` 的半安装目录。
 
 部署成功后运行：
 
