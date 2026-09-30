@@ -24,6 +24,8 @@ TRANSIENT_MAX_CREST_FACTOR_LOSS_DB = 3.0
 ALL_DEREVERB_ROLES = ("lead_vocal", "harmony_vocal", "bass", "drums", "guitar", "piano", "other")
 DEFAULT_DEREVERB_ROLES = ("lead_vocal",)
 HIGH_FREQUENCY_PROTECTED_ROLES = {"lead_vocal", "harmony_vocal", "drums", "guitar", "piano", "other"}
+PUBLIC_MEGA53_VOCAL_STEMS = ("lead-vocal", "back-vocal", "vocal")
+PUBLIC_MEGA53_EXPECTED_STEM_COUNT = 53
 
 PUBLIC_MEGA53_GROUPS = {
     "lead_vocal": ("lead-vocal", "vocal"),
@@ -311,20 +313,37 @@ class Workflow:
             self.manifest.settings["separation_backend"] = "legacy-private"
         else:
             cache = self.root / "audit" / "mega53-stems"
-            if cache.exists():
-                shutil.rmtree(cache)
-            raw_stems, command = msst.separate_all(
-                self.runtime, source, cache, msst.PUBLIC_MEGA53_MODEL, log
+            raw_stems = {
+                path.stem.removeprefix("track_"): path
+                for path in cache.glob("track_*.wav")
+            }
+            cache_complete = (
+                len(raw_stems) >= PUBLIC_MEGA53_EXPECTED_STEM_COUNT
+                and all(name in raw_stems for name in PUBLIC_MEGA53_VOCAL_STEMS)
             )
+            if cache_complete:
+                log(f"检测到完整 MVSep Mega 53-stem 缓存（{len(raw_stems)} 轨），直接复用，不重复推理。")
+                command = ["reuse-mega53-cache", str(cache)]
+            else:
+                if cache.exists():
+                    shutil.rmtree(cache)
+                raw_stems, command = msst.separate_all(
+                    self.runtime, source, cache, msst.PUBLIC_MEGA53_MODEL, log
+                )
             vocals = output / f"{self._prefix(2)}_vocals.wav"
             accompaniment = output / f"{self._prefix(2)}_accompaniment.wav"
-            vocal_sources = [raw_stems[name] for name in ("lead-vocal", "back-vocal", "vocal") if name in raw_stems]
+            vocal_sources = [raw_stems[name] for name in PUBLIC_MEGA53_VOCAL_STEMS if name in raw_stems]
             if not vocal_sources:
                 raise RuntimeError("MVSep Mega 53-stem 未生成任何人声轨。")
+            accompaniment_sources = [
+                path for name, path in raw_stems.items() if name not in PUBLIC_MEGA53_VOCAL_STEMS
+            ]
+            if not accompaniment_sources:
+                raise RuntimeError("MVSep Mega 53-stem 未生成任何非人声轨。")
             mix_command = mix_audio(vocal_sources, vocals, log)
-            subtract_command = subtract_audio(source, vocals, accompaniment, log)
+            accompaniment_command = mix_audio(accompaniment_sources, accompaniment, log)
             files = [vocals, accompaniment]
-            stage.commands.extend([command, mix_command, subtract_command])
+            stage.commands.extend([command, mix_command, accompaniment_command])
             stage.models.append(msst.model_evidence(self.runtime, msst.PUBLIC_MEGA53_MODEL))
             self.manifest.settings["separation_backend"] = "public-mega53-v1"
             self.manifest.save()
@@ -336,7 +355,7 @@ class Workflow:
                 (
                     "使用用户已有的私有 MSST 人声模型分离人声与伴奏。"
                     if legacy_ready
-                    else "使用 MIT 许可的 MVSep Mega 53-stem v1；lead-vocal、back-vocal、vocal 合成为人声，伴奏由原混音减去人声得到。"
+                    else "使用 MIT 许可的 MVSep Mega 53-stem v1；lead-vocal、back-vocal、vocal 合成为人声，伴奏直接由其余 50 个非人声分轨混合得到，不再使用原混音减人声。"
                 ),
                 f"两轨时长差 {validation['duration_spread_seconds']:.6f} 秒。",
             ]

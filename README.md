@@ -2,13 +2,15 @@
 
 StemScore 是完全本地运行的 Windows 客户端，复用用户已有且有权使用的 MSST-GUI / UVR 环境，按五步人工审查流程完成：音乐导入 → 人声/伴奏 → 主唱/和声/乐器分轨 → 选择性去混响 → 各轨 MIDI。每一步保存命令、模型与产物 SHA-256、参数和日志，并在用户点击审查通过前停止。
 
-`1.0.0-public-rc6` 是可公开分发的核心版。应用包本身不携带模型权重或预装 Python/CUDA runtime；缺少运行环境时，客户端会提供“一键修复运行环境”，从固定的官方公开源安装 FFmpeg、MSST、GPU 运行时、MIT 许可的 MVSep Mega 53-stem v1、Basic Pitch 与 TransKun，并在固定下载资产上执行校验。RC6 继承 RC5 的稳健断点续传，并把 MSST 的大体积临时输入/输出移动到项目所在磁盘，避免 53-stem 推理在系统盘 `%TEMP%` 写入数 GB 数据导致 C 盘被占满。完整离线私有模型包仍因部分旧权重未声明再分发许可、仅限研究或仅限非商业使用而保持私有。
+`1.0.0-public-rc7` 是可公开分发的核心版。应用包本身不携带模型权重或预装 Python/CUDA runtime；缺少运行环境时，客户端会提供“一键修复运行环境”，从固定的官方公开源安装 FFmpeg、MSST、GPU 运行时、MIT 许可的 MVSep Mega 53-stem v1、Basic Pitch 与 TransKun，并在固定下载资产上执行校验。RC7 修复公开 53-stem 路径下“伴奏仍残留明显人声”的组合逻辑：伴奏直接由非人声分轨聚合，不再使用原混音减人声估计；完整的 53-stem 缓存也会在重试时直接复用。完整离线私有模型包仍因部分旧权重未声明再分发许可、仅限研究或仅限非商业使用而保持私有。
 
 RC3 增加运行时报错后的自动修复：全新 Windows 机器可以先安装并启动公开客户端，在首次遇到缺失运行环境时一键补齐合法公开组件，完成后自动重试失败步骤。当前五步主流程已经不再把未使用的 UVR/Demucs 目录当作硬依赖。
 
 RC4 进一步简化实际使用：损坏但仍可解码的 FLAC/音频会尽量跳过坏帧继续处理；步骤状态会在任务线程启动前立即显示“处理中”；第 4 步未选去混响的分轨保持原名称；第 5 步可在第 4 步未完全结束时直接使用第 3 步分轨；界面新增“跳过当前步骤”和“直接运行所选步骤”。
 
 RC6 修复大体积 53-stem 推理占满系统盘的问题：原始 53 个 WAV 直接写入项目目录，临时输入也跟随项目磁盘；运行前会检查项目盘剩余空间。外部处理程序失败时，界面同时显示关键错误行，不再只有“退出码为 1”。
+
+RC7 修复第二步伴奏生成：`lead-vocal`、`back-vocal`、`vocal` 只进入人声轨，伴奏由其余非人声分轨直接混合，不再做“原混音 - 人声”相位抵消。若 53-stem 缓存已经完整，重试第二步只重新组合文件，不再次执行大模型推理。
 
 ## 主要功能
 
@@ -43,9 +45,9 @@ py -3.12 -m venv .venv312
 公开构建：
 
 ```powershell
-.\build_stemscore.ps1 -Version 1.0.0-public-rc6
+.\build_stemscore.ps1 -Version 1.0.0-public-rc7
 powershell -NoProfile -ExecutionPolicy Bypass -File .\packaging\Build-StemScoreGpuRelease.ps1 `
-  -Version 1.0.0-public-rc6 -PublicSafe
+  -Version 1.0.0-public-rc7 -PublicSafe
 ```
 
 `-PublicSafe` 禁止传入 runtime payload，并拒绝应用目录内的常见模型权重文件。不要把自己导入的模型、音乐、训练数据、项目输出或运行日志提交到公开仓库或 Release。
