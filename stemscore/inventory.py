@@ -135,7 +135,21 @@ class LocalRuntime:
                 self.msst_root / "pretrain" / "BS-Rofo-SW-Fixed.ckpt",
             )
         )
-        if not public_model_ready and not legacy_model_ready:
+        vocal_model_ready = all(
+            path.is_file()
+            for path in (
+                self.msst_root / "configs" / "BS-Roformer-Resurrection-Config.yaml",
+                self.msst_root / "pretrain" / "BS-Roformer-Resurrection.ckpt",
+            )
+        )
+        dual_model_ready = all(
+            path.is_file()
+            for path in (
+                self.msst_root / "configs" / "config_deux_becruily.yaml",
+                self.msst_root / "pretrain" / "becruily_deux.ckpt",
+            )
+        )
+        if not public_model_ready and not legacy_model_ready and not vocal_model_ready and not dual_model_ready:
             missing.extend([str(self.public_mega53_config), str(self.public_mega53_checkpoint)])
         if shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None:
             missing.append("ffmpeg / ffprobe")

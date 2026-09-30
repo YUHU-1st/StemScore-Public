@@ -315,16 +315,20 @@ def validate_music3_caption(
 
 
 def _request_refinement(settings: LocalLlmSettings, deterministic_caption: str) -> str:
+    permitted_facts = sorted(set(_normalized_words(deterministic_caption)) & _FACT_TERMS)
     system_prompt = (
         "You rewrite music-production captions for MiniMax Music 3. Return only the caption. "
         "Use exactly these Markdown headings, once each and in this order: ### Global Metadata, "
         "### Vocal Details, ### Arrangement. Write 250 to 450 English words. Preserve only facts "
-        "supported by the draft. Do not quote, paraphrase, translate, or invent song lyrics."
+        "supported by the draft. Do not introduce any new genre or instrument names, even as examples; "
+        f"the only permitted genre and instrument fact words are: {', '.join(permitted_facts) or 'none'}. "
+        "If the draft says vocal presence is unmeasured, do not call the source vocal or instrumental. "
+        "Do not quote, paraphrase, translate, or invent song lyrics."
     )
     user_prompt = (
-        "Refine the deterministic local-analysis draft below. Describe genre, mood, tempo, vocal "
-        "treatment, instrumentation, section development, transitions, and production texture while "
-        "keeping uncertain claims qualified.\n\n"
+        "Polish the deterministic local-analysis draft below. Keep its BPM, evidence limits, uncertain "
+        "vocal status, and supported instruments unchanged. Improve only phrasing, section development, "
+        "transitions, and production texture; do not fill in facts the draft did not measure.\n\n"
         + deterministic_caption.strip()
     )
     body = json.dumps(

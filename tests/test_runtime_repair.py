@@ -73,6 +73,7 @@ def test_core_validation_no_longer_requires_unused_uvr_demucs(tmp_path: Path, mo
     [
         "本地运行环境不完整：C:/StemScoreRuntime/MSST/env/Scripts/python.exe",
         "MSST 文件不存在：model.ckpt",
+        "MSST Python 不存在：python.exe",
         "Basic Pitch 本地运行时未安装。",
         "TransKun V2 本地运行时未安装。",
         "未找到必需程序：ffmpeg",

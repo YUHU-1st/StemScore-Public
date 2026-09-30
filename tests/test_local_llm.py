@@ -143,6 +143,7 @@ def test_refinement_uses_local_chat_endpoint_without_sending_lyrics(tmp_path: Pa
     assert captured["path"] == "/v1/chat/completions"
     request_text = json.dumps(captured["request"], ensure_ascii=False)
     assert "secret words never leave this machine" not in request_text
+    assert "only permitted genre and instrument fact words" in request_text
     assert captured["request"]["stream"] is False  # type: ignore[index]
 
 

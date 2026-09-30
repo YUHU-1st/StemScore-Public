@@ -4,7 +4,7 @@
 
 ## 处理决策
 
-- 人声/伴奏：MSST BS-RoFormer 预测 vocals；accompaniment 是混音减去预测值。
+- 人声/伴奏：优先使用用户自备双输出模型分别预测两轨；其次使用专用人声模型及其互补输出。公开版只有 Mega53 时，单独取 `vocal` 轨并以原混音计算伴奏残差，绝不叠加其它 50 个可能重叠的预测轨。残差在浮点域测量峰值与平均电平，再按同一增益缩放写入 PCM；命令和测量值保存在步骤日志。
 - 主唱/和声：Karaoke RoFormer 预测 lead；harmony 是已分离人声减去 lead。这里的“和声”包括叠唱、伴唱和模型无法归为主唱的剩余人声。
 - 乐器六分轨：BS-RoFormer SW Fixed 直接输出 bass、drums、other、vocals、guitar、piano；客户端在已分离伴奏上保留五类乐器。权重 SHA-256 固定为 `24e7d35ee9c64415673d3fd33e06a67cac2c103c5df6267ba1576459c775916e`，原权重未声明许可证，因此不随客户端压缩包再分发。
 - 去混响角色策略：项目清单的 `settings.dereverb_roles` 保存客户端逐角色选择；默认仅 `lead_vocal`。未选择轨逐字节复制并记录 `bypassed_by_role_policy`，不加载去混响模型。旧项目没有该字段时也采用此默认值。

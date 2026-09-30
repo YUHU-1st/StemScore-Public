@@ -107,26 +107,46 @@ def convert_to_wav(source: Path, target: Path, log: LogCallback) -> list[str]:
     return command
 
 
-def mix_audio(sources: list[Path], target: Path, log: LogCallback) -> list[str]:
+def _filter_levels_db(inputs: list[str], audio_filter: str, log: LogCallback) -> tuple[float, float]:
+    command = [
+        executable("ffmpeg"), "-hide_banner", "-nostats", "-y", *inputs,
+        "-filter_complex", f"{audio_filter},astats=metadata=0:reset=0",
+        "-f", "null", "NUL" if os.name == "nt" else "/dev/null",
+    ]
+    log("$ " + subprocess.list2cmdline(command))
+    result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace", check=True)
+    peak = re.findall(r"Peak level dB:\s*(-?(?:inf|\d+(?:\.\d+)?))", result.stderr)
+    rms = re.findall(r"RMS level dB:\s*(-?(?:inf|\d+(?:\.\d+)?))", result.stderr)
+    if not peak or not rms:
+        raise RuntimeError("FFmpeg 未返回混音电平，不能安全写入 PCM。")
+    return float(rms[-1]), float(peak[-1])
+
+
+def mix_audio(sources: list[Path], target: Path, log: LogCallback, *, float_output: bool = False) -> list[str]:
     if not sources:
         raise ValueError("至少需要一个音频输入。")
     target.parent.mkdir(parents=True, exist_ok=True)
     if len(sources) == 1:
         shutil.copy2(sources[0], target)
         return ["copy", str(sources[0]), str(target)]
-    command = [executable("ffmpeg"), "-hide_banner", "-loglevel", "warning", "-y"]
-    for source in sources:
-        command.extend(["-i", str(source)])
+    inputs = [item for source in sources for item in ("-i", str(source))]
+    command = [executable("ffmpeg"), "-hide_banner", "-loglevel", "warning", "-y", *inputs]
+    audio_filter = f"amix=inputs={len(sources)}:normalize=0:dropout_transition=0"
+    gain_db = 0.0
+    if not float_output:
+        _, peak_db = _filter_levels_db(inputs, audio_filter, log)
+        gain_db = min(0.0, -1.0 - peak_db)
+        log(f"混音浮点峰值 {peak_db:.2f} dBFS，写入前统一增益 {gain_db:.2f} dB。")
     command.extend(
         [
             "-filter_complex",
-            f"amix=inputs={len(sources)}:normalize=0:dropout_transition=0",
+            f"{audio_filter},volume={gain_db:.6f}dB" if gain_db else audio_filter,
             "-ar",
             "44100",
             "-ac",
             "2",
             "-c:a",
-            "pcm_s24le",
+            "pcm_f32le" if float_output else "pcm_s24le",
             str(target),
         ]
     )
@@ -136,18 +156,25 @@ def mix_audio(sources: list[Path], target: Path, log: LogCallback) -> list[str]:
 
 def subtract_audio(source: Path, subtract: Path, target: Path, log: LogCallback) -> list[str]:
     target.parent.mkdir(parents=True, exist_ok=True)
+    inputs = ["-i", str(source), "-i", str(subtract)]
+    audio_filter = "[1:a]volume=-1[negative];[0:a][negative]amix=inputs=2:normalize=0:dropout_transition=0"
+    mixed_rms_db, mixed_peak_db = _filter_levels_db(inputs, audio_filter, log)
+    source_rms_db, source_peak_db = volume_stats_db(source)
+    gain_db = min(0.0, min(-1.0, source_peak_db) - mixed_peak_db, source_rms_db - mixed_rms_db)
+    log(
+        f"残差浮点峰值 {mixed_peak_db:.2f} dBFS / RMS {mixed_rms_db:.2f} dBFS；"
+        f"原轨峰值 {source_peak_db:.2f} dBFS / RMS {source_rms_db:.2f} dBFS；"
+        f"统一增益 {gain_db:.2f} dB。"
+    )
     command = [
         executable("ffmpeg"),
         "-hide_banner",
         "-loglevel",
         "warning",
         "-y",
-        "-i",
-        str(source),
-        "-i",
-        str(subtract),
+        *inputs,
         "-filter_complex",
-        "[1:a]volume=-1[negative];[0:a][negative]amix=inputs=2:normalize=0:dropout_transition=0",
+        f"{audio_filter},volume={gain_db:.6f}dB" if gain_db else audio_filter,
         "-ar",
         "44100",
         "-ac",

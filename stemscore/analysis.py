@@ -448,12 +448,15 @@ def build_music3_caption(
     active = [item for item in instrumentation if item.get("active")]
     lead_vocal = any(item["role"] in {"lead_vocal", "vocals"} for item in active)
     backing_vocal = any(item["role"] == "harmony_vocal" for item in active)
+    vocal_evidence_available = any(
+        item["role"] in {"lead_vocal", "harmony_vocal", "vocals"} for item in instrumentation
+    )
     instruments = [
         item["name_en"]
         for item in active
         if item["role"] not in {"lead_vocal", "harmony_vocal", "vocals"}
     ]
-    instrument_text = ", ".join(instruments) if instruments else "the detected instrumental texture"
+    instrument_text = ", ".join(instruments) if instruments else "the source's overall musical texture"
     if lead_vocal:
         vocal_text = (
             "Lead vocals are present; gender, register, and timbre are intentionally unspecified because "
@@ -468,12 +471,21 @@ def build_music3_caption(
             "change only when the arrangement opens up, and keep the lead centered while any supporting "
             "voices remain wider and lower in level. Do not quote, translate, or paraphrase source lyrics."
         )
-    else:
+    elif vocal_evidence_available:
         vocal_text = (
             f"Instrumental piece. Let {instruments[0] if instruments else 'the main instrumental texture'} "
             "carry the lead melodic role; do not add vocals. Shape an original motif with breath-like phrasing, "
             "clear pauses, and a gradual intensity arc. Keep the foreground instrument centered and intelligible, "
             "use ambience only to support depth, and avoid reproducing any source melody or identifiable solo."
+        )
+    else:
+        vocal_text = (
+            "Vocal presence has not been measured because no vocal stem is available. Do not infer that the "
+            "source is instrumental, and do not assign a singer's identity, gender, register, or timbre. "
+            "Keep the vocal decision open for listening review before generation. If vocals are desired, use "
+            "newly written lyrics and an original melody with clear phrasing; if not, let an original "
+            "instrumental motif carry the foreground. In either case, keep the lead intelligible, use "
+            "ambience only to support depth, and avoid reproducing the source melody or performance."
         )
 
     tags = _lyric_section_tags(lyrics)
@@ -502,7 +514,7 @@ def build_music3_caption(
                 f"{descriptions.get('dynamics_en', 'moderately dynamic')}, with "
                 f"{descriptions.get('transient_en', 'moderate transient activity')}. "
                 "Treat the genre label as a conservative production reference derived from local signal and stem evidence. "
-                "The tempo, spectral balance, onset density, dynamic range, and reviewed stem presence are measured "
+                "The tempo, spectral balance, onset density, dynamic range, and any available stem presence are measured "
                 "locally; artist identity and unmeasured performance traits are not part of the instruction. Preserve "
                 "the broad pacing, instrumentation hierarchy, and sectional energy contour while composing new melody, "
                 "harmony, lyrics, and performance details. Keep the mix clean and contemporary, leave headroom for the "
@@ -516,8 +528,8 @@ def build_music3_caption(
             " ".join(arrangement_parts)
             + (
                 " Keep instrument entrances, exits, groove changes, transitions, and spatial depth coherent across "
-                "sections. Begin with fewer layers and a narrower image, then add only elements supported by the reviewed "
-                "stems. Let the rhythm section define pulse without masking the lead, keep bass movement locked to the "
+                "sections. Begin with fewer layers and a narrower image, then add only elements supported by the source "
+                "audio and any available stems. Let the rhythm section define pulse without masking the lead, keep bass movement locked to the "
                 "kick where both are present, and give harmonic instruments separate registers. Use short fills, filtered "
                 "tails, or brief dropouts to mark boundaries. The climax should increase density and width rather than "
                 "simply becoming louder. In the ending, remove layers in a deliberate order and retain a natural decay. "

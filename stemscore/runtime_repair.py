@@ -124,6 +124,7 @@ def is_repairable_runtime_error(error: Exception | str) -> bool:
             "本地运行环境不完整",
             "MSST 文件不存在",
             "MSST 运行环境",
+            "MSST Python 不存在",
             "Basic Pitch 本地运行时未安装",
             "TransKun V2 本地运行时未安装",
             "未找到必需程序：ffmpeg",

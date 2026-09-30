@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import re
 import shutil
+import tempfile
 from typing import Callable
 import uuid
 
@@ -19,21 +20,22 @@ from .midi_tools import merge_midi_files, write_empty_midi
 LogCallback = Callable[[str], None]
 
 DEREVERB_MAX_LEVEL_LOSS_DB = 6.0
+DEREVERB_MAX_LEVEL_GAIN_DB = 3.0
 TIMBRE_MAX_HIGH_FREQUENCY_LOSS_DB = 4.0
 TRANSIENT_MAX_CREST_FACTOR_LOSS_DB = 3.0
 ALL_DEREVERB_ROLES = ("lead_vocal", "harmony_vocal", "bass", "drums", "guitar", "piano", "other")
 DEFAULT_DEREVERB_ROLES = ("lead_vocal",)
 HIGH_FREQUENCY_PROTECTED_ROLES = {"lead_vocal", "harmony_vocal", "drums", "guitar", "piano", "other"}
-PUBLIC_MEGA53_VOCAL_STEMS = ("lead-vocal", "back-vocal", "vocal")
+PUBLIC_MEGA53_VOCAL_STEMS = ("vocal",)
 PUBLIC_MEGA53_EXPECTED_STEM_COUNT = 53
 
 PUBLIC_MEGA53_GROUPS = {
-    "lead_vocal": ("lead-vocal", "vocal"),
+    "lead_vocal": ("lead-vocal",),
     "harmony_vocal": ("back-vocal",),
-    "bass": ("bass", "double-bass"),
-    "drums": ("drums", "kick", "snare", "hh", "toms", "percussion", "congas", "tambourine", "timpani", "triangle"),
-    "guitar": ("guitar", "acoustic-guitar", "electric-guitar", "dobro", "banjo", "mandolin", "sitar", "ukulele"),
-    "piano": ("piano", "digital-piano", "keys", "harpsichord", "organ"),
+    "bass": ("bass",),
+    "drums": ("drums",),
+    "guitar": ("guitar",),
+    "piano": ("piano",),
 }
 
 
@@ -46,6 +48,8 @@ def dereverb_quality_status(
     source_crest_factor_db: float = 0.0,
     candidate_crest_factor_db: float = 0.0,
 ) -> tuple[bool, str]:
+    if candidate_level_db - source_level_db > DEREVERB_MAX_LEVEL_GAIN_DB:
+        return False, "rejected_level_gain"
     if candidate_level_db - source_level_db < -DEREVERB_MAX_LEVEL_LOSS_DB:
         return False, "rejected_level_loss"
     if (
@@ -292,11 +296,23 @@ class Workflow:
         self.runtime.validate_core()
         source = self._artifact_by_role(1, "source")
         output = self.root / STAGE_DIRS[2]
-        legacy_ready = all(
-            msst.model_available(self.runtime, model)
-            for model in (msst.VOCAL_MODEL, msst.KARAOKE_MODEL, msst.SIX_STEM_MODEL)
-        )
-        if legacy_ready:
+        if msst.model_available(self.runtime, msst.DUAL_VOCAL_MODEL):
+            files, command = msst.separate(
+                self.runtime,
+                source,
+                output,
+                msst.DUAL_VOCAL_MODEL,
+                {
+                    "Vocals": f"{self._prefix(2)}_vocals.wav",
+                    "Instrumental": f"{self._prefix(2)}_accompaniment.wav",
+                },
+                log,
+            )
+            stage.commands.append(command)
+            stage.models.append(msst.model_evidence(self.runtime, msst.DUAL_VOCAL_MODEL))
+            self.manifest.settings["separation_backend"] = "local-direct-two-stem"
+            explanation = "使用用户自行安装的双轨模型，直接预测人声和伴奏；该权重为 CC-BY-NC-4.0，不随公开版分发。"
+        elif msst.model_available(self.runtime, msst.VOCAL_MODEL):
             files, command = msst.separate(
                 self.runtime,
                 source,
@@ -310,7 +326,8 @@ class Workflow:
             )
             stage.commands.append(command)
             stage.models.append(msst.model_evidence(self.runtime, msst.VOCAL_MODEL))
-            self.manifest.settings["separation_backend"] = "legacy-private"
+            self.manifest.settings["separation_backend"] = "local-vocal-model"
+            explanation = "使用用户已有的人声模型直接预测人声，伴奏由模型的互补输出得到；不混合其它乐器分轨。"
         else:
             cache = self.root / "audit" / "mega53-stems"
             raw_stems = {
@@ -332,31 +349,20 @@ class Workflow:
                 )
             vocals = output / f"{self._prefix(2)}_vocals.wav"
             accompaniment = output / f"{self._prefix(2)}_accompaniment.wav"
-            vocal_sources = [raw_stems[name] for name in PUBLIC_MEGA53_VOCAL_STEMS if name in raw_stems]
-            if not vocal_sources:
-                raise RuntimeError("MVSep Mega 53-stem 未生成任何人声轨。")
-            accompaniment_sources = [
-                path for name, path in raw_stems.items() if name not in PUBLIC_MEGA53_VOCAL_STEMS
-            ]
-            if not accompaniment_sources:
-                raise RuntimeError("MVSep Mega 53-stem 未生成任何非人声轨。")
-            mix_command = mix_audio(vocal_sources, vocals, log)
-            accompaniment_command = mix_audio(accompaniment_sources, accompaniment, log)
+            shutil.copy2(raw_stems["vocal"], vocals)
+            accompaniment_command = subtract_audio(source, vocals, accompaniment, log)
             files = [vocals, accompaniment]
-            stage.commands.extend([command, mix_command, accompaniment_command])
+            stage.commands.extend([command, accompaniment_command])
             stage.models.append(msst.model_evidence(self.runtime, msst.PUBLIC_MEGA53_MODEL))
             self.manifest.settings["separation_backend"] = "public-mega53-v1"
             self.manifest.save()
+            explanation = "MVSep 的 vocal 已包含主唱与和声，直接用该轨作为人声；伴奏从原混音减去这一轨并检查电平，不再叠加相互重叠的 50 个乐器预测轨。"
         self._add_audio(stage, files[0], "vocals")
         self._add_audio(stage, files[1], "accompaniment")
         validation = validate_durations(files)
         stage.explanation.extend(
             [
-                (
-                    "使用用户已有的私有 MSST 人声模型分离人声与伴奏。"
-                    if legacy_ready
-                    else "使用 MIT 许可的 MVSep Mega 53-stem v1；lead-vocal、back-vocal、vocal 合成为人声，伴奏直接由其余 50 个非人声分轨混合得到，不再使用原混音减人声。"
-                ),
+                explanation,
                 f"两轨时长差 {validation['duration_spread_seconds']:.6f} 秒。",
             ]
         )
@@ -365,14 +371,21 @@ class Workflow:
         vocals = self._artifact_by_role(2, "vocals")
         accompaniment = self._artifact_by_role(2, "accompaniment")
         output = self.root / STAGE_DIRS[3]
-        if self.manifest.settings.get("separation_backend") == "public-mega53-v1":
+        if (
+            self.manifest.settings.get("separation_backend") == "public-mega53-v1"
+            or msst.model_available(self.runtime, msst.PUBLIC_MEGA53_MODEL)
+        ):
             cache = self.root / "audit" / "mega53-stems"
             raw_stems = {
                 path.stem.removeprefix("track_"): path
                 for path in cache.glob("track_*.wav")
             }
-            if not raw_stems:
-                raise RuntimeError("MVSep Mega 53-stem 缓存不存在；请重试第 2 步。")
+            if len(raw_stems) < PUBLIC_MEGA53_EXPECTED_STEM_COUNT:
+                source = self._artifact_by_role(1, "source")
+                raw_stems, command = msst.separate_all(
+                    self.runtime, source, cache, msst.PUBLIC_MEGA53_MODEL, log
+                )
+                stage.commands.append(command)
             grouped: dict[str, Path] = {}
             commands: list[list[str]] = []
             for role, names in PUBLIC_MEGA53_GROUPS.items():
@@ -388,6 +401,7 @@ class Workflow:
                     [grouped[role] for role in ("bass", "drums", "guitar", "piano")],
                     known_instruments,
                     log,
+                    float_output=True,
                 )
             )
             other = output / f"{self._prefix(3)}_other.wav"
@@ -404,8 +418,8 @@ class Workflow:
             validation = validate_durations(files, tolerance_seconds=0.2)
             stage.explanation.extend(
                 [
-                    "沿用第 2 步一次生成的 MVSep Mega 53-stem v1 原始分轨，不重复加载 1.37 GB 模型。",
-                    "lead-vocal/vocal 合为主唱，back-vocal 为和声；低音、鼓、吉他和键盘按 53-stem 标签聚合，其余伴奏残差作为 other。",
+                    "优先复用第 2 步的 MVSep Mega 53-stem v1 原始分轨；没有缓存时独立推理，不依赖第 2 步的模型选择。",
+                    "主唱、和声、贝斯、鼓、吉他和钢琴各取对应模型轨，不叠加互相重叠的父级/子级预测；其余伴奏残差作为 other。",
                     f"七轨最大时长差 {validation['duration_spread_seconds']:.6f} 秒。",
                 ]
             )
@@ -582,7 +596,7 @@ class Workflow:
                     "crest_factor_change_db": candidate_crest_factor - source_crest_factor,
                     "dereverb_accepted": accepted,
                     "quality_status": quality_status,
-                    "quality_gate": "reject above 6 dB level loss, above 4 dB relative high-frequency loss at 6 kHz for protected roles, or above 3 dB crest-factor loss",
+                    "quality_gate": "reject above 3 dB level gain, above 6 dB level loss, above 4 dB relative high-frequency loss at 6 kHz for protected roles, or above 3 dB crest-factor loss",
                 },
             )
         stage.commands.extend(commands)
@@ -690,21 +704,35 @@ class Workflow:
         )
 
     def run_music_analysis(self, callback: LogCallback | None = None) -> list[Artifact]:
-        if self.manifest.stage(5).status != "reviewed":
-            raise RuntimeError("请先完成并审查通过五步分轨与 MIDI 流程。")
         from .analysis import analyze_music
 
         log = callback or (lambda _message: None)
-        source = self._artifact_by_role(1, "source")
+        source_artifact = next(
+            (item for item in self.manifest.stage(1).artifacts if item.role == "source" and Path(item.path).is_file()),
+            None,
+        )
+        source = Path(source_artifact.path) if source_artifact else Path(self.manifest.source_original)
+        if not source.is_file():
+            raise FileNotFoundError(source)
+        if source_artifact is None:
+            source_artifact = Artifact.from_file(source, "source_original", "audio/source")
         stems = [
             artifact
             for artifact in self.manifest.stage(4).artifacts
-            if artifact.media_type == "audio/wav"
+            if artifact.media_type == "audio/wav" and Path(artifact.path).is_file()
         ]
         output = self.root / "06_music_analysis"
         output.mkdir(parents=True, exist_ok=True)
+        (self.root / "audit").mkdir(parents=True, exist_ok=True)
         log("正在本地计算 BPM、调性、配器与结构候选…")
-        report, command = analyze_music(self.runtime, source, stems=stems, log=log)
+        preparation_command = None
+        if source_artifact.role == "source_original":
+            with tempfile.TemporaryDirectory(prefix=".analysis-source-", dir=self.root / "audit") as temporary:
+                analysis_source = Path(temporary) / "source.wav"
+                preparation_command = convert_to_wav(source, analysis_source, log)
+                report, command = analyze_music(self.runtime, analysis_source, stems=stems, log=log)
+        else:
+            report, command = analyze_music(self.runtime, source, stems=stems, log=log)
         prefix = safe_name(self.manifest.title)
         json_path = output / f"{prefix}_music-analysis.json"
         markdown_path = output / f"{prefix}_music-analysis.md"
@@ -721,11 +749,16 @@ class Workflow:
             item.get("active") and item.get("role") in {"lead_vocal", "vocals"}
             for item in report.get("instrumentation", [])
         )
-        input_template = (
-            "[Intro]\n[Verse]\n[Chorus]\n[Bridge]\n[Chorus]\n[Outro]"
-            if has_vocal
-            else "[Intro]\n[Instrumental]\n[Solo]\n[Outro]"
+        vocal_evidence_available = any(
+            item.get("role") in {"lead_vocal", "harmony_vocal", "vocals"}
+            for item in report.get("instrumentation", [])
         )
+        if has_vocal:
+            input_template = "[Intro]\n[Verse]\n[Chorus]\n[Bridge]\n[Chorus]\n[Outro]"
+        elif vocal_evidence_available:
+            input_template = "[Intro]\n[Instrumental]\n[Solo]\n[Outro]"
+        else:
+            input_template = "[Intro]\n[Verse]\n[Chorus]\n[Outro]"
         comfyui_path.write_text(
             json.dumps(
                 {
@@ -742,7 +775,7 @@ class Workflow:
                     ),
                     "cfg_scale": 1.7,
                     "top_k": 50,
-                    "lyrics_note_zh": "人声歌曲请在段落标签下填入自有或已授权歌词；本文件不复制源歌歌词。",
+                    "lyrics_note_zh": "未提供人声分轨时，请先试听确认是否有人声；需要歌词时只填入自有或已授权歌词。本文件不复制源歌歌词。",
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -760,13 +793,14 @@ class Workflow:
                 {
                     "schema_version": 1,
                     "completed_at": utc_now(),
-                    "source": asdict(self.manifest.stage(1).artifacts[0]),
+                    "source": asdict(source_artifact),
+                    "source_preparation_command": preparation_command,
                     "stems": [asdict(artifact) for artifact in stems],
                     "command": command,
                     "outputs": [asdict(artifact) for artifact in artifacts],
                     "explanation": [
                         "BPM、调性、响度、频谱、起音与结构由本地 librosa 算法生成。",
-                        "配器由已审查分轨的角色和相对能量推导；曲风只输出带证据的保守候选。",
+                        "配器由当前可用分轨的角色和相对能量推导；没有分轨时只保留音频特征证据，不要求五步流程完成。",
                         "Music 3 instructions 遵循官方三段式 caption，不复制源歌歌词。",
                     ],
                 },

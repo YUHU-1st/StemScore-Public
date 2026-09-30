@@ -61,6 +61,12 @@ def test_drum_dereverb_accepts_preserved_brightness() -> None:
     assert status == "accepted"
 
 
+def test_dereverb_rejects_loudness_boost() -> None:
+    accepted, status = dereverb_quality_status("piano", -21.0, -16.5)
+    assert accepted is False
+    assert status == "rejected_level_gain"
+
+
 def test_piano_dereverb_rejects_lost_harmonics() -> None:
     accepted, status = dereverb_quality_status("piano", -21.3, -22.0, -20.0, -26.0)
     assert accepted is False
@@ -179,8 +185,9 @@ def test_stage4_preserves_selected_role_when_permissive_dereverb_is_unavailable(
 def test_public_mega53_groups_keep_vocals_and_instrument_roles_disjoint() -> None:
     flattened = [stem for stems in PUBLIC_MEGA53_GROUPS.values() for stem in stems]
     assert len(flattened) == len(set(flattened))
-    assert PUBLIC_MEGA53_GROUPS["lead_vocal"] == ("lead-vocal", "vocal")
+    assert PUBLIC_MEGA53_GROUPS["lead_vocal"] == ("lead-vocal",)
     assert PUBLIC_MEGA53_GROUPS["harmony_vocal"] == ("back-vocal",)
+    assert PUBLIC_MEGA53_VOCAL_STEMS == ("vocal",)
     assert {"bass", "drums", "guitar", "piano"} <= PUBLIC_MEGA53_GROUPS.keys()
 
 
@@ -207,6 +214,7 @@ def test_public_mega53_fallback_runs_model_once_and_reuses_raw_stems(
         output_dir.mkdir(parents=True, exist_ok=True)
         stems = {"lead-vocal", "back-vocal", "vocal", "saxophone"}
         stems.update(stem for group in PUBLIC_MEGA53_GROUPS.values() for stem in group)
+        stems.update(f"instrument-{index:02d}" for index in range(45))
         result = {}
         for stem in stems:
             path = output_dir / f"track_{stem}.wav"
@@ -230,7 +238,7 @@ def test_public_mega53_fallback_runs_model_once_and_reuses_raw_stems(
     assert roles == {"lead_vocal", "harmony_vocal", "bass", "drums", "guitar", "piano", "other"}
 
 
-def test_public_stage2_builds_accompaniment_only_from_non_vocal_stems(
+def test_public_stage2_uses_single_vocal_stem_and_source_residual(
     tmp_path: Path, monkeypatch
 ) -> None:
     source = tmp_path / "song.wav"
@@ -256,27 +264,85 @@ def test_public_stage2_builds_accompaniment_only_from_non_vocal_stems(
             result[stem] = path
         return result, ["msst", "inference"]
 
-    mix_calls: list[list[str]] = []
+    residual_inputs: list[tuple[Path, Path]] = []
 
-    def fake_mix_audio(sources, target, _log):
-        mix_calls.append([path.stem.removeprefix("track_") for path in sources])
+    def fake_subtract_audio(original, vocal, target, _log):
+        residual_inputs.append((original, vocal))
         shutil.copy2(source, target)
-        return ["mix"]
+        return ["subtract"]
 
     monkeypatch.setattr("stemscore.workflow.msst.separate_all", fake_separate_all)
-    monkeypatch.setattr("stemscore.workflow.mix_audio", fake_mix_audio)
-    monkeypatch.setattr(
-        "stemscore.workflow.subtract_audio",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("stage 2 must not subtract vocals from source")
-        ),
-    )
+    monkeypatch.setattr("stemscore.workflow.subtract_audio", fake_subtract_audio)
+    monkeypatch.setattr("stemscore.workflow.mix_audio", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("stage 2 must not sum overlapping stems")))
 
     workflow.run_stage(2)
 
-    assert set(mix_calls[0]) == set(PUBLIC_MEGA53_VOCAL_STEMS)
-    assert set(mix_calls[1]) == {"drums", "bass", "piano"}
-    assert not (set(mix_calls[1]) & set(PUBLIC_MEGA53_VOCAL_STEMS))
+    assert residual_inputs == [(source, workflow.root / "02_vocal_accompaniment" / f"{workflow._prefix(2)}_vocals.wav")]
+    assert workflow.manifest.stage(2).commands[-1] == ["subtract"]
+
+
+def test_stage2_prefers_direct_two_stem_model_and_stage3_can_use_mega53(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from stemscore.backends import msst
+
+    source = tmp_path / "song.wav"
+    write_audible_wav(source, frames=2205)
+    workflow = Workflow.create(source, tmp_path / "projects", "direct-two-stem")
+    workflow.manifest.stage(1).status = "reviewed"
+    workflow.manifest.stage(1).artifacts = [Artifact.from_file(source, "source", "audio/wav")]
+    workflow.manifest.stage(2).status = "ready"
+    workflow.manifest.save()
+    monkeypatch.setattr("stemscore.inventory.LocalRuntime.validate_core", lambda _runtime: None)
+    monkeypatch.setattr(
+        "stemscore.workflow.msst.model_available",
+        lambda _runtime, model: model in {msst.DUAL_VOCAL_MODEL, msst.PUBLIC_MEGA53_MODEL},
+    )
+    monkeypatch.setattr(
+        "stemscore.workflow.msst.model_evidence",
+        lambda _runtime, model: {"name": model.name},
+    )
+    selected_models = []
+
+    def fake_separate(_runtime, _source, output, model, names, _log):
+        selected_models.append(model)
+        assert set(names) == {"Vocals", "Instrumental"}
+        files = [output / name for name in names.values()]
+        for path in files:
+            shutil.copy2(source, path)
+        return files, ["direct-two-stem"]
+
+    def fake_separate_all(_runtime, _source, output, model, _log):
+        selected_models.append(model)
+        output.mkdir(parents=True, exist_ok=True)
+        names = {"vocal", *(stem for group in PUBLIC_MEGA53_GROUPS.values() for stem in group)}
+        names.update(f"instrument-{index:02d}" for index in range(46))
+        files = {}
+        for name in names:
+            path = output / f"track_{name}.wav"
+            shutil.copy2(source, path)
+            files[name] = path
+        return files, ["mega53"]
+
+    def fake_mix(sources, target, _log, **_kwargs):
+        shutil.copy2(sources[0], target)
+        return ["mix"]
+
+    def fake_subtract(_source, _subtract, target, _log):
+        shutil.copy2(source, target)
+        return ["subtract"]
+
+    monkeypatch.setattr("stemscore.workflow.msst.separate", fake_separate)
+    monkeypatch.setattr("stemscore.workflow.msst.separate_all", fake_separate_all)
+    monkeypatch.setattr("stemscore.workflow.mix_audio", fake_mix)
+    monkeypatch.setattr("stemscore.workflow.subtract_audio", fake_subtract)
+
+    workflow.run_stage(2)
+    workflow.approve(2)
+    workflow.run_stage(3)
+
+    assert selected_models == [msst.DUAL_VOCAL_MODEL, msst.PUBLIC_MEGA53_MODEL]
+    assert workflow.manifest.settings["separation_backend"] == "local-direct-two-stem"
 
 
 def test_public_stage2_reuses_complete_53_stem_cache_on_retry(
@@ -290,7 +356,7 @@ def test_public_stage2_reuses_complete_53_stem_cache_on_retry(
     workflow.manifest.stage(2).status = "ready"
     cache = workflow.root / "audit" / "mega53-stems"
     cache.mkdir(parents=True, exist_ok=True)
-    names = list(PUBLIC_MEGA53_VOCAL_STEMS) + [f"instrument-{index:02d}" for index in range(50)]
+    names = list(PUBLIC_MEGA53_VOCAL_STEMS) + [f"instrument-{index:02d}" for index in range(52)]
     for name in names:
         shutil.copy2(source, cache / f"track_{name}.wav")
     workflow.manifest.save()

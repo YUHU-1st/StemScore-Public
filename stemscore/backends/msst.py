@@ -32,6 +32,17 @@ VOCAL_MODEL = MsstModel(
     primary_stem="vocals",
 )
 
+DUAL_VOCAL_MODEL = MsstModel(
+    name="Mel-Band RoFormer Deux",
+    model_type="mel_band_roformer",
+    config="configs/config_deux_becruily.yaml",
+    checkpoint="pretrain/becruily_deux.ckpt",
+    primary_stem="Vocals",
+    extract_complement=False,
+    source_url="https://huggingface.co/becruily/mel-band-roformer-deux",
+    license="CC-BY-NC-4.0",
+)
+
 KARAOKE_MODEL = MsstModel(
     name="BS-Roformer Karaoke Frazer/Becruily",
     model_type="bs_roformer",

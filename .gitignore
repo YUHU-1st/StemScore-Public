@@ -33,6 +33,7 @@ probe.wav.asd
 /validation/stemscore-batch-bass.mid
 /validation/stemscore-batch-vocal.mid
 /validation/stemscore-demucs/
+/validation/rc8-smoke/
 /validation/stemscore-dereverb/
 /validation/stemscore-drums.mid
 /validation/stemscore-msst/

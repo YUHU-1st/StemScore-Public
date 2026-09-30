@@ -1,6 +1,6 @@
 # StemScore 音乐分析与 MiniMax Music 3
 
-StemScore 在五步分轨与 MIDI 流程全部审查通过后，才允许执行第六步音乐分析。该步骤不会改写既有分轨或 MIDI，而是读取源音频、已审查分轨的元数据，在项目的 `06_music_analysis` 目录生成可复核的 JSON、Markdown、MiniMax Music 3 提示词、ComfyUI 传递 JSON 和审计记录。
+StemScore 的音乐分析与 Music 3 提示词独立于五步分轨/MIDI 流程。打开客户端后可直接点击“独立音乐分析 / Music 3 提示词”并选择歌曲；已有项目也可随时运行。程序不会改写分轨或 MIDI；若当前项目已有可用分轨，会使用其元数据补充配器证据，否则只依据原曲音频生成报告和提示词。结果写入项目的 `06_music_analysis` 目录。
 
 ## 输出文件
 
@@ -10,7 +10,7 @@ StemScore 在五步分轨与 MIDI 流程全部审查通过后，才允许执行�
 | `_music-analysis.md` | 面向人的分析报告 | 快速试听复核 BPM、调性、配器和段落 |
 | `_minimax-music3-instructions.txt` | 英文三段式 Structured Caption | 粘贴到 MiniMax Music 3 的 Caption / music description 输入 |
 | `_comfyui-minimax-music3-input.json` | ComfyUI 原生节点的 `caption` / `lyrics` / 采样参数 | 直接填入 `MiniMaxMusic3TextEncode` |
-| `_analysis-audit.json` | 输入、分轨、命令和输出哈希 | 追踪分析来自哪个已审查项目 |
+| `_analysis-audit.json` | 输入、可用分轨、命令和输出哈希 | 追踪分析来自哪首本地歌曲 |
 
 `_comfyui-minimax-music3-input.json` 是可直接映射到 ComfyUI 原生 `MiniMaxMusic3TextEncode` 节点的传递对象，不冒充包含节点坐标和连线的完整 workflow。JSON 直接提供 `caption`、`lyrics`、`seed`、`max_duration`、`cfg_scale` 和 `top_k`，并附官方 ComfyUI 模板地址；导入官方模板后将同名值填入节点即可。
 
@@ -26,7 +26,7 @@ StemScore 在五步分轨与 MIDI 流程全部审查通过后，才允许执行�
 
 ### 曲风
 
-基础曲风是带证据的保守候选，不是真值。v1 组合 BPM、起音密度和已审查分轨的活跃角色。例如，有效主唱与钢琴同时存在且 BPM 小于 95 时，候选为 `piano-led pop ballad`；鼓、贝斯和吉他同时有效时，候选为 `pop-rock band`。每个候选均保留置信度和中文证据。
+基础曲风是带证据的保守候选，不是真值。v1 组合 BPM、起音密度和当前可用分轨的活跃角色。例如，有效主唱与钢琴同时存在且 BPM 小于 95 时，候选为 `piano-led pop ballad`；鼓、贝斯和吉他同时有效时，候选为 `pop-rock band`。每个候选均保留置信度和中文证据；没有分轨时不推断人声是否存在。
 
 若用户已经在模型管理器中选中并完整安装 `clap-htsat-fused`，系统会额外启用本地 LAION CLAP 零样本增强：以 48 kHz 单声道读取全曲，在约 10%、50%、90% 位置各取一个 10 秒窗口，与固定曲风标签计算相似度，输出前三个语义候选。CLAP 候选带有 `method: local_clap_zero_shot`，完整采样位置、设备和分数写入 `semantic_audio`；原有 DSP/分轨候选仍保留，配器证据仍优先。模型未选中或未完整安装时直接使用确定性规则，不生成 `semantic_audio`；已启用但推理失败时也继续确定性流程，并把失败信息写入 `semantic_audio`。两种情况都不会阻断报告和提示词。CLAP 也是候选排序器，不证明唯一曲风。
 
@@ -61,7 +61,7 @@ MiniMax 官方仓库建议 Structured Caption 依次包含：
 
 ## 人工审查步骤
 
-1. 确认前五步均为 `reviewed`，并在审计 JSON 中核对源文件与分轨哈希。
+1. 在审计 JSON 中核对源文件哈希；若使用了已有分轨，再核对相应分轨哈希。无需先完成五步流程。
 2. 用节拍器分别试听最终 BPM、原始 BPM 以及必要的半拍候选，重点检查弱起、复合拍号和自由速度段。
 3. 对照键盘或 DAW 调性工具试听主歌、高潮和尾奏；置信度低于 `0.35` 时保持提示词无调性约束。
 4. 独听每个标为活跃的分轨，确认目标乐器不是泄漏；特别检查 dominant 与 inactive 的临界项。

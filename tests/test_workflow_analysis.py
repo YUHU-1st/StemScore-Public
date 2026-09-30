@@ -3,8 +3,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
-
 from stemscore.manifest import Artifact, ProjectManifest
 from stemscore.workflow import Workflow
 
@@ -30,18 +28,10 @@ def _workflow(tmp_path: Path) -> Workflow:
     return Workflow(manifest)
 
 
-def test_music_analysis_requires_completed_five_step_review(tmp_path: Path) -> None:
-    workflow = _workflow(tmp_path)
-    with pytest.raises(RuntimeError, match="五步"):
-        workflow.run_music_analysis()
-
-
 def test_music_analysis_writes_reviewable_outputs_and_audit(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch
 ) -> None:
     workflow = _workflow(tmp_path)
-    workflow.manifest.stage(5).status = "reviewed"
-    workflow.manifest.save()
 
     def fake_analyze(_runtime, source, stems, log):
         assert source.name == "song.wav"
@@ -81,4 +71,31 @@ def test_music_analysis_writes_reviewable_outputs_and_audit(
         (output / "Analysis Test_analysis-audit.json").read_text(encoding="utf-8")
     )
     assert audit["command"] == ["local-python", "analyze_music.py"]
+    assert audit["source_preparation_command"] is None
     assert workflow.manifest.settings["music_analysis"]["artifacts"]
+
+
+def test_music_analysis_runs_without_any_five_step_artifact(tmp_path: Path, monkeypatch) -> None:
+    workflow = _workflow(tmp_path)
+    workflow.manifest.stage(1).artifacts = []
+    workflow.manifest.stage(4).artifacts = []
+    workflow.manifest.save()
+
+    def fake_convert(source, target, _log):
+        target.write_bytes(source.read_bytes())
+        return ["convert", str(source), str(target)]
+
+    def fake_analyze(_runtime, source, stems, log):
+        assert source.name == "source.wav"
+        assert not stems
+        return ({"instrumentation": [], "music3_caption": "caption", "markdown": "report"}, ["analyze"])
+
+    monkeypatch.setattr("stemscore.workflow.convert_to_wav", fake_convert)
+    monkeypatch.setattr("stemscore.analysis.analyze_music", fake_analyze)
+    artifacts = workflow.run_music_analysis()
+
+    assert len(artifacts) == 5
+    assert workflow.manifest.stage(5).status != "reviewed"
+    audit = json.loads((workflow.root / "06_music_analysis" / "Analysis Test_analysis-audit.json").read_text(encoding="utf-8"))
+    assert audit["source"]["role"] == "source_original"
+    assert audit["source_preparation_command"][0] == "convert"

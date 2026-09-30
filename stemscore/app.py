@@ -36,7 +36,7 @@ class App(tk.Tk):
         self.minsize(920, 640)
         self.workflow: Workflow | None = None
         self.current_stage = tk.IntVar(value=1)
-        self.status = tk.StringVar(value="新建项目后，从第 1 步开始。")
+        self.status = tk.StringVar(value="可新建五步项目，或直接分析音乐。")
         self.dereverb_vars = {
             role: tk.BooleanVar(value=role in DEFAULT_DEREVERB_ROLES)
             for role in ALL_DEREVERB_ROLES
@@ -45,6 +45,7 @@ class App(tk.Tk):
         self._training_server = None
         self._model_server = None
         self._repair_stage: int | None = None
+        self._repair_analysis = False
         self._build()
 
     def _build(self) -> None:
@@ -128,7 +129,7 @@ class App(tk.Tk):
         self.repair_button.configure(state="disabled")
         self.analysis_button = ttk.Button(
             left,
-            text="生成音乐分析 / Music 3 提示词",
+            text="独立音乐分析 / Music 3 提示词",
             command=self._run_music_analysis,
         )
         self.analysis_button.pack(fill="x", pady=4)
@@ -196,6 +197,7 @@ class App(tk.Tk):
                 dereverb_roles=self._selected_dereverb_roles(),
             )
             self._repair_stage = None
+            self._repair_analysis = False
             self.current_stage.set(1)
             self._refresh()
             self._run_stage(1)
@@ -209,6 +211,7 @@ class App(tk.Tk):
         try:
             self.workflow = Workflow.load(find_project(Path(path)))
             self._repair_stage = None
+            self._repair_analysis = False
             self._load_dereverb_selection()
             selected = next((stage.number for stage in self.workflow.manifest.stages if stage.status not in {"reviewed", "skipped", "locked"}), 5)
             self.current_stage.set(selected)
@@ -258,9 +261,10 @@ class App(tk.Tk):
             messagebox.showerror(APP_NAME, str(error))
 
     def _repair_runtime(self) -> None:
-        if not self.workflow or self._repair_stage is None:
+        if not self.workflow or (self._repair_stage is None and not self._repair_analysis):
             return
         number = self._repair_stage
+        repair_analysis = self._repair_analysis
         self.status.set("正在一键修复运行环境；首次安装需要下载约 1.4 GB 模型和 GPU 依赖…")
         self.repair_button.configure(state="disabled")
         self._append_log("开始一键修复。仅使用固定版本的官方公开源，并对下载资产执行 SHA-256 校验。")
@@ -269,17 +273,24 @@ class App(tk.Tk):
             try:
                 assert self.workflow is not None
                 RuntimeRepairer(self.workflow.runtime).repair(self._append_log)
-                self.after(0, lambda: self._repair_done(number))
+                self.after(0, lambda: self._repair_done(number, repair_analysis))
             except Exception as error:
                 self.after(0, lambda error=error: self._repair_failed(error))
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _repair_done(self, number: int) -> None:
+    def _repair_done(self, number: int | None, repair_analysis: bool = False) -> None:
         if not self.workflow:
             return
         self._repair_stage = None
+        self._repair_analysis = False
+        if repair_analysis:
+            self.status.set("运行环境修复完成，正在重新生成音乐分析和提示词…")
+            self._refresh()
+            self._run_music_analysis()
+            return
         self.status.set("运行环境修复完成，正在自动重试失败步骤…")
+        assert number is not None
         if self.workflow.manifest.stage(number).status == "failed":
             self.workflow.retry(number)
         self._refresh()
@@ -356,7 +367,20 @@ class App(tk.Tk):
 
     def _run_music_analysis(self) -> None:
         if not self.workflow:
-            return
+            source = filedialog.askopenfilename(
+                title="选择要独立分析的音乐文件",
+                filetypes=(("音频", "*.wav *.flac *.mp3 *.ogg *.m4a *.aif *.aiff"), ("全部文件", "*.*")),
+            )
+            if not source:
+                return
+            root = filedialog.askdirectory(title="选择分析结果保存目录", initialdir=str(DEFAULT_PROJECTS_ROOT.parent))
+            try:
+                self.workflow = Workflow.create(Path(source), Path(root or DEFAULT_PROJECTS_ROOT))
+                self.current_stage.set(1)
+                self._refresh()
+            except Exception as error:
+                messagebox.showerror(APP_NAME, str(error))
+                return
         self.status.set("正在本地分析 BPM、曲风、配器和编曲结构…")
         self.analysis_button.configure(state="disabled")
 
@@ -382,10 +406,15 @@ class App(tk.Tk):
         os.startfile(output)
 
     def _music_analysis_failed(self, error: Exception) -> None:
-        self.status.set("音乐分析失败。")
+        self._repair_analysis = is_repairable_runtime_error(error)
+        self.status.set("音乐分析失败，可一键修复运行环境。" if self._repair_analysis else "音乐分析失败。")
         self._append_log(f"错误：{error}")
         self._refresh()
-        messagebox.showerror(APP_NAME, str(error))
+        messagebox.showerror(
+            APP_NAME,
+            f"{error}\n\n可点击左侧“一键修复运行环境”后自动重试分析。"
+            if self._repair_analysis else str(error),
+        )
 
     def _select_stage(self, _event=None) -> None:
         selected = self.stage_list.curselection()
@@ -422,7 +451,7 @@ class App(tk.Tk):
             self.direct_button.configure(state="disabled")
             self.approve_button.configure(state="disabled")
             self.skip_button.configure(state="disabled")
-            self.analysis_button.configure(state="disabled")
+            self.analysis_button.configure(state="normal")
             self.repair_button.configure(state="disabled")
             for check in self.dereverb_checks:
                 check.configure(state="normal")
@@ -438,10 +467,10 @@ class App(tk.Tk):
         self.approve_button.configure(state="normal" if stage.status == "review_required" else "disabled")
         self.skip_button.configure(state="disabled" if stage.status in {"running", "reviewed", "skipped"} else "normal")
         self.repair_button.configure(
-            state="normal" if self._repair_stage is not None and stage.number == self._repair_stage else "disabled"
+            state="normal" if self._repair_analysis or (self._repair_stage is not None and stage.number == self._repair_stage) else "disabled"
         )
         self.analysis_button.configure(
-            state="normal" if self.workflow.manifest.stage(5).status == "reviewed" else "disabled"
+            state="normal"
         )
         dereverb_state = "normal" if self.workflow.manifest.stage(4).status in {"locked", "ready", "failed"} else "disabled"
         for check in self.dereverb_checks:

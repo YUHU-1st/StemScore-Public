@@ -130,6 +130,14 @@ def test_low_confidence_key_is_not_asserted_in_music3_caption() -> None:
     assert "Tonal center" not in caption
 
 
+def test_missing_stems_do_not_claim_the_song_is_instrumental() -> None:
+    report = build_music_report(synthetic_worker_analysis(), [])
+    caption = build_music3_caption(report)
+    assert "Vocal presence has not been measured" in caption
+    assert "Instrumental piece" not in caption
+    assert 250 <= validate_music3_caption(caption) <= 450
+
+
 def test_local_clap_candidates_are_explainable_and_keep_rule_evidence() -> None:
     report = build_music_report(synthetic_worker_analysis(), synthetic_stems())
     apply_clap_style_candidates(
