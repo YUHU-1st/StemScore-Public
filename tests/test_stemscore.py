@@ -11,7 +11,13 @@ import pytest
 from stemscore.manifest import Artifact, ProjectManifest
 from stemscore.midi_tools import merge_midi_files, normalize_single_track, write_drum_midi, write_empty_midi
 from stemscore.training.catalog import build_catalog
-from stemscore.workflow import PUBLIC_MEGA53_GROUPS, Workflow, dereverb_quality_status, safe_name
+from stemscore.workflow import (
+    PUBLIC_MEGA53_GROUPS,
+    PUBLIC_MEGA53_VOCAL_STEMS,
+    Workflow,
+    dereverb_quality_status,
+    safe_name,
+)
 
 
 def write_wav(path: Path, frames: int = 4410) -> None:
@@ -222,6 +228,90 @@ def test_public_mega53_fallback_runs_model_once_and_reuses_raw_stems(
         if artifact.media_type == "audio/wav"
     }
     assert roles == {"lead_vocal", "harmony_vocal", "bass", "drums", "guitar", "piano", "other"}
+
+
+def test_public_stage2_builds_accompaniment_only_from_non_vocal_stems(
+    tmp_path: Path, monkeypatch
+) -> None:
+    source = tmp_path / "song.wav"
+    write_audible_wav(source, frames=2205)
+    workflow = Workflow.create(source, tmp_path / "projects", "public-accompaniment")
+    workflow.manifest.stage(1).status = "reviewed"
+    workflow.manifest.stage(1).artifacts = [Artifact.from_file(source, "source", "audio/wav")]
+    workflow.manifest.stage(2).status = "ready"
+    workflow.manifest.save()
+    monkeypatch.setattr("stemscore.inventory.LocalRuntime.validate_core", lambda _runtime: None)
+    monkeypatch.setattr("stemscore.workflow.msst.model_available", lambda _runtime, _model: False)
+    monkeypatch.setattr(
+        "stemscore.workflow.msst.model_evidence",
+        lambda _runtime, model: {"name": model.name, "backend": "MSST"},
+    )
+
+    def fake_separate_all(_runtime, _input_path, output_dir, _model, _log):
+        output_dir.mkdir(parents=True, exist_ok=True)
+        result = {}
+        for stem in (*PUBLIC_MEGA53_VOCAL_STEMS, "drums", "bass", "piano"):
+            path = output_dir / f"track_{stem}.wav"
+            shutil.copy2(source, path)
+            result[stem] = path
+        return result, ["msst", "inference"]
+
+    mix_calls: list[list[str]] = []
+
+    def fake_mix_audio(sources, target, _log):
+        mix_calls.append([path.stem.removeprefix("track_") for path in sources])
+        shutil.copy2(source, target)
+        return ["mix"]
+
+    monkeypatch.setattr("stemscore.workflow.msst.separate_all", fake_separate_all)
+    monkeypatch.setattr("stemscore.workflow.mix_audio", fake_mix_audio)
+    monkeypatch.setattr(
+        "stemscore.workflow.subtract_audio",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("stage 2 must not subtract vocals from source")
+        ),
+    )
+
+    workflow.run_stage(2)
+
+    assert set(mix_calls[0]) == set(PUBLIC_MEGA53_VOCAL_STEMS)
+    assert set(mix_calls[1]) == {"drums", "bass", "piano"}
+    assert not (set(mix_calls[1]) & set(PUBLIC_MEGA53_VOCAL_STEMS))
+
+
+def test_public_stage2_reuses_complete_53_stem_cache_on_retry(
+    tmp_path: Path, monkeypatch
+) -> None:
+    source = tmp_path / "song.wav"
+    write_audible_wav(source, frames=2205)
+    workflow = Workflow.create(source, tmp_path / "projects", "public-cache-retry")
+    workflow.manifest.stage(1).status = "reviewed"
+    workflow.manifest.stage(1).artifacts = [Artifact.from_file(source, "source", "audio/wav")]
+    workflow.manifest.stage(2).status = "ready"
+    cache = workflow.root / "audit" / "mega53-stems"
+    cache.mkdir(parents=True, exist_ok=True)
+    names = list(PUBLIC_MEGA53_VOCAL_STEMS) + [f"instrument-{index:02d}" for index in range(50)]
+    for name in names:
+        shutil.copy2(source, cache / f"track_{name}.wav")
+    workflow.manifest.save()
+
+    monkeypatch.setattr("stemscore.inventory.LocalRuntime.validate_core", lambda _runtime: None)
+    monkeypatch.setattr("stemscore.workflow.msst.model_available", lambda _runtime, _model: False)
+    monkeypatch.setattr(
+        "stemscore.workflow.msst.model_evidence",
+        lambda _runtime, model: {"name": model.name, "backend": "MSST"},
+    )
+    monkeypatch.setattr(
+        "stemscore.workflow.msst.separate_all",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("complete cache should be reused")
+        ),
+    )
+
+    workflow.run_stage(2)
+
+    assert workflow.manifest.stage(2).status == "review_required"
+    assert workflow.manifest.stage(2).commands[0][0] == "reuse-mega53-cache"
 
 
 def test_manifest_roundtrip_and_hash_verification(tmp_path: Path) -> None:
