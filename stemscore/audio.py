@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import sys
+from collections import deque
 from typing import Any, Callable
 
 
@@ -47,8 +48,14 @@ def run_logged(
         creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
     )
     assert process.stdout is not None
+    recent_lines: deque[str] = deque(maxlen=12)
+    error_lines: deque[str] = deque(maxlen=5)
     for line in process.stdout:
         cleaned = line.rstrip()
+        if cleaned:
+            recent_lines.append(cleaned)
+            if re.search(r"(?:error|exception|traceback|failed|cannot|no space|out of space)", cleaned, re.IGNORECASE):
+                error_lines.append(cleaned)
         try:
             log(cleaned)
         except UnicodeEncodeError:
@@ -56,7 +63,8 @@ def run_logged(
             log(cleaned.encode(encoding, errors="replace").decode(encoding))
     code = process.wait()
     if code:
-        raise RuntimeError(f"处理程序退出码为 {code}：{command[0]}")
+        detail = error_lines[-1] if error_lines else (recent_lines[-1] if recent_lines else "未返回错误详情")
+        raise RuntimeError(f"处理程序退出码为 {code}：{command[0]}\n错误详情：{detail}")
 
 
 def convert_to_wav(source: Path, target: Path, log: LogCallback) -> list[str]:

@@ -132,6 +132,27 @@ def _inference_command(
     return command
 
 
+def _project_temp_parent(output_dir: Path) -> Path:
+    """Keep large MSST scratch data on the same volume as the project output."""
+    parent = output_dir.parent
+    parent.mkdir(parents=True, exist_ok=True)
+    return parent
+
+
+def _check_project_free_space(source: Path, output_dir: Path, multiplier: int, log: Callable[[str], None]) -> None:
+    free = shutil.disk_usage(_project_temp_parent(output_dir)).free
+    estimated = max(source.stat().st_size * multiplier, 512 * 1024 * 1024)
+    log(
+        f"MSST 工作盘：{output_dir.anchor or output_dir.parent}，可用 {free / 1024 / 1024 / 1024:.1f} GiB，"
+        f"本步骤预计至少需要 {estimated / 1024 / 1024 / 1024:.1f} GiB 临时/输出空间。"
+    )
+    if free < estimated:
+        raise RuntimeError(
+            f"项目所在磁盘空间不足：当前可用 {free / 1024 / 1024 / 1024:.1f} GiB，"
+            f"本步骤预计至少需要 {estimated / 1024 / 1024 / 1024:.1f} GiB。"
+        )
+
+
 def separate_all(
     runtime: LocalRuntime,
     source: Path,
@@ -145,25 +166,30 @@ def separate_all(
         if not path.is_file():
             raise RuntimeError(f"MSST 文件不存在：{path}")
     output_dir.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="stemscore-msst-") as temporary:
+    _check_project_free_space(source, output_dir, 80, log)
+    for stale in output_dir.glob("track_*.wav"):
+        stale.unlink(missing_ok=True)
+    with tempfile.TemporaryDirectory(
+        prefix=".stemscore-msst-input-",
+        dir=str(_project_temp_parent(output_dir)),
+    ) as temporary:
         temporary_path = Path(temporary)
         input_dir = temporary_path / "input"
-        raw_dir = temporary_path / "output"
         input_dir.mkdir()
-        raw_dir.mkdir()
         staged = input_dir / "track.wav"
         try:
             os.link(source, staged)
         except OSError:
             shutil.copy2(source, staged)
-        command = _inference_command(runtime, model, input_dir, raw_dir)
+        # The 53-stem model can emit ~5 GiB for a four-minute song. Writing it
+        # directly into the project cache avoids filling %TEMP% on the system drive
+        # and avoids a second full copy of all stems.
+        command = _inference_command(runtime, model, input_dir, output_dir)
         run_logged(command, log)
         outputs: dict[str, Path] = {}
-        for raw in raw_dir.rglob("track_*.wav"):
+        for raw in output_dir.rglob("track_*.wav"):
             stem = raw.stem.removeprefix("track_")
-            target = output_dir / f"track_{stem}.wav"
-            shutil.copy2(raw, target)
-            outputs[stem] = target
+            outputs[stem] = raw
         if not outputs:
             raise RuntimeError("MSST 未生成任何分轨文件。")
         return outputs, command
@@ -184,7 +210,11 @@ def separate(
             raise RuntimeError(f"MSST 文件不存在：{path}")
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="stemscore-msst-") as temporary:
+    _check_project_free_space(source, output_dir, 12, log)
+    with tempfile.TemporaryDirectory(
+        prefix=".stemscore-msst-",
+        dir=str(_project_temp_parent(output_dir)),
+    ) as temporary:
         temporary_path = Path(temporary)
         input_dir = temporary_path / "input"
         raw_dir = temporary_path / "output"
